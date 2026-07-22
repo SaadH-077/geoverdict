@@ -1,0 +1,22 @@
+# run-time artefacts (persisted to Drive on Colab; regenerable locally)
+outputs/
+figures/
+data/
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# environments & editors
+.venv/
+venv/
+.idea/
+.vscode/
+
+# credentials — never commit these
+.env
+*.json.key
+service-account*.json
