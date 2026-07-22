@@ -47,6 +47,23 @@ than any architecture knob would — that is the finding.
 afterwards) + ~10 min training on a T4. **Runtime → Change runtime type →
 T4 GPU** before starting.
 """),
+    md("""
+### 📦 Where the data in this notebook comes from
+
+| Data | Source | How it enters the notebook |
+|---|---|---|
+| **Sentinel-2 L2A pixel chips** (T1 2020, T2 2024) | Copernicus / ESA, via the **AWS Earth Search STAC** API + Cloud-Optimised GeoTIFFs (`earth-search.aws.element84.com`, no login) | `geoverdict.s2` issues windowed HTTP reads for just each plot's 32×32 window; cached to `chips.npz` |
+| **Weak labels** (cleared / stable) | Hansen post-2020 loss fraction from chapter 02 | thresholded into positives/negatives; the ambiguous band is excluded from training |
+| **Hard-negative locations** (stable forest) | **JRC Tropical Moist Forest** on Earth Engine (`projects/JRC/TMF`) | sampled server-side into point locations, then chipped like any plot |
+
+Two different access paths appear here **on purpose**: the *pixels* come from
+STAC/COG windowed reads (we need the raw data and full control of masking),
+while the *hard-negative locations* come from Earth Engine (a server-side
+sample over a huge product). Choosing the access path per workload — rather
+than forcing one tool — is a deliberate design decision, discussed in the
+notebook. The chip download is the slow step and is cached to Drive; every
+later run loads `chips.npz` in seconds.
+"""),
     *bootstrap_cells(),
     code("""
 EE_PROJECT = ""   # <- same Earth Engine project id as before (for hard negatives)

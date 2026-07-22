@@ -75,7 +75,12 @@ def draw_geom(ax, geom, *, facecolor="none", edgecolor=PALETTE["neutral"],
     for k, p in enumerate(polys):
         if not isinstance(p, Polygon):
             continue
-        xs, ys = zip(*list(p.exterior.coords))
+        # slice to (x, y) explicitly: a Z-carrying ring (e.g. the add_z
+        # corruption) yields 3 columns, and zip(*coords) would then unpack
+        # into three names and crash. Taking columns 0:2 draws any geometry,
+        # 2D or 3D, which is exactly what the corruption gallery needs.
+        ring = np.asarray(p.exterior.coords, dtype=float)
+        xs, ys = ring[:, 0], ring[:, 1]
         if facecolor != "none":
             ax.fill(xs, ys, facecolor=facecolor, alpha=alpha * 0.5, zorder=zorder - 1)
         ax.plot(xs, ys, color=edgecolor, lw=lw, alpha=alpha, zorder=zorder,

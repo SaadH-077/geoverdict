@@ -16,6 +16,12 @@ import nbformat as nbf
 ROOT = Path(__file__).resolve().parents[1]
 NB_DIR = ROOT / "notebooks"
 
+# GitHub coordinates for the "Open in Colab" badge. If you fork, change these
+# and rebuild the notebooks (python scripts/nb01_geometry.py ...).
+GITHUB_USER = "SaadH-077"
+GITHUB_REPO = "geoverdict"
+GITHUB_BRANCH = "main"
+
 
 def md(text: str) -> nbf.NotebookNode:
     return nbf.v4.new_markdown_cell(text.strip())
@@ -25,9 +31,20 @@ def code(text: str) -> nbf.NotebookNode:
     return nbf.v4.new_code_cell(text.strip())
 
 
+def colab_badge(filename: str) -> nbf.NotebookNode:
+    """A clickable 'Open in Colab' badge cell, rendered by GitHub's viewer."""
+    url = (f"https://colab.research.google.com/github/{GITHUB_USER}/{GITHUB_REPO}"
+           f"/blob/{GITHUB_BRANCH}/notebooks/{filename}")
+    return md(f'<a href="{url}" target="_parent">'
+              f'<img src="https://colab.research.google.com/assets/colab-badge.svg" '
+              f'alt="Open In Colab"/></a>')
+
+
 def save(cells: list, filename: str) -> Path:
     nb = nbf.v4.new_notebook()
-    nb.cells = cells
+    # every notebook opens with its Colab badge, so it can be launched with one
+    # click straight from the GitHub file view
+    nb.cells = [colab_badge(filename)] + cells
     nb.metadata = {
         "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
         "language_info": {"name": "python", "version": "3.12"},

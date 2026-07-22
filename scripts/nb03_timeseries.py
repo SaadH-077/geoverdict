@@ -43,6 +43,21 @@ behind each choice:
 **Expected runtime:** ~12 minutes (server-side reductions on Earth Engine +
 detector fits; no GPU).
 """),
+    md("""
+### 📦 Where the data in this notebook comes from
+
+| Data | Source | How it enters the notebook |
+|---|---|---|
+| **Sentinel-2 L2A surface reflectance** (2019–2025) | Copernicus / ESA, hosted on Earth Engine as `COPERNICUS/S2_SR_HARMONIZED` | queried server-side; per plot & scene, the SCL-cloud-masked mean NDVI/NBR returns (cached to `series_raw.parquet`) |
+| **SCL cloud mask** | part of each Sentinel-2 L2A scene | used inside the same Earth Engine call to drop cloud/shadow pixels |
+| **Hansen post-2020 loss** (reference labels) | Univ. of Maryland, on Earth Engine | the independent referee the detector is scored against |
+| **Plot geometries + baselines** | `outputs/plots_analysis.geojson`, `outputs/baseline.csv` from chapters 01–02 | loaded from Drive |
+
+Again nothing large is downloaded — the six-year reflectance history for every
+plot is reduced to (plot, date, NDVI, NBR) tuples **on Google's servers**, and
+only those tuples come back. The first fetch is cached to Drive, so re-runs
+load in seconds.
+"""),
     *bootstrap_cells(),
     code("""
 EE_PROJECT = ""   # <- same Earth Engine project id as chapter 02

@@ -50,6 +50,27 @@ deforestation frontier (Novo Progresso, Pará, Brazil), using only free and
 public data. It is an independent study project, inspired by the class of
 problems EUDR-compliance teams work on; it uses no proprietary code or data.
 
+## What the input actually is
+
+The pipeline's input is a **plot portfolio** — a collection of per-plot records,
+each with a geometry, an optional declared area, and a shared sourcing region
+(AOI). Crucially, "geometry" is not assumed to be a clean polygon:
+
+- **polygons / multipolygons** for plots > 4 ha (the EUDR norm), **or a single
+  point** for plots ≤ 4 ha (allowed under EUDR Art. 9, buffered to a footprint);
+- in **any CRS** — WGS84 is required, but Web-Mercator/UTM/national-grid inputs
+  are detected and (where identifiable) re-projected, else refused;
+- **correct or corrupted** — swapped lat/lon, self-intersections, duplicates,
+  slivers, teleported coordinates are all diagnosed and repaired-or-refused;
+- from any **file format** (GeoJSON, Shapefile, KML, WKT, CSV of lat/lon) —
+  `geopandas`/`shapely` parse these into the geometries the validator consumes;
+  GeoVerdict operates on geometries, not formats.
+
+Chapter 01 makes this contract explicit and exercises every case. The short
+answer to *"is the input just polygons?"* is **no** — turning messy,
+mixed-type, mixed-CRS submissions into a trustworthy analysable footprint (or
+an honest refusal) is the first ML-adjacent problem the pipeline solves.
+
 ## The pipeline
 
 ```mermaid
@@ -64,14 +85,18 @@ flowchart LR
     G --> H["06 verification\nablations, split honesty,\nlimitations"]
 ```
 
-| # | Notebook | The question it answers |
-|---|---|---|
-| 01 | [`01_geometry_gauntlet`](notebooks/01_geometry_gauntlet.ipynb) | Which failure classes can we *detect* and how much geometry can we *repair* — measured per class against a known answer key? |
-| 02 | [`02_forest_baseline`](notebooks/02_forest_baseline.ipynb) | Was each plot forest at the cutoff — and how often does the answer depend on which official map you consult? |
-| 03 | [`03_timeseries_screening`](notebooks/03_timeseries_screening.ipynb) | When did each plot's forest signal break, from its own six-year NDVI/NBR history — before any deep learning? |
-| 04 | [`04_learned_detector`](notebooks/04_learned_detector.ipynb) | Do *pixels* beat plot-mean series — and does the training data (hard negatives) matter more than the architecture? |
-| 05 | [`05_verdicts_evidence`](notebooks/05_verdicts_evidence.ipynb) | What is the defensible verdict per plot, what does it cost in analyst hours, and what does the auditor open? |
-| 06 | [`06_verification`](notebooks/06_verification.ipynb) | Which claims survive ablation, seed variance, and a deliberate demonstration of the random-split trap? |
+Click **Open in Colab** to launch any chapter directly (each notebook also
+carries the badge at its top on GitHub). Run them **in order 01 → 06** — later
+chapters load earlier chapters' outputs from your Google Drive.
+
+| # | Notebook | Runtime | The question it answers |
+|---|---|---|---|
+| 01 | [`01_geometry_gauntlet`](notebooks/01_geometry_gauntlet.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SaadH-077/geoverdict/blob/main/notebooks/01_geometry_gauntlet.ipynb) | CPU | Which failure classes can we *detect* and how much geometry can we *repair* — measured per class against a known answer key? |
+| 02 | [`02_forest_baseline`](notebooks/02_forest_baseline.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SaadH-077/geoverdict/blob/main/notebooks/02_forest_baseline.ipynb) | CPU + GEE | Was each plot forest at the cutoff — and how often does the answer depend on which official map you consult? |
+| 03 | [`03_timeseries_screening`](notebooks/03_timeseries_screening.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SaadH-077/geoverdict/blob/main/notebooks/03_timeseries_screening.ipynb) | CPU + GEE | When did each plot's forest signal break, from its own six-year NDVI/NBR history — before any deep learning? |
+| 04 | [`04_learned_detector`](notebooks/04_learned_detector.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SaadH-077/geoverdict/blob/main/notebooks/04_learned_detector.ipynb) | **T4 GPU** + GEE | Do *pixels* beat plot-mean series — and does the training data (hard negatives) matter more than the architecture? |
+| 05 | [`05_verdicts_evidence`](notebooks/05_verdicts_evidence.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SaadH-077/geoverdict/blob/main/notebooks/05_verdicts_evidence.ipynb) | CPU | What is the defensible verdict per plot, what does it cost in analyst hours, and what does the auditor open? |
+| 06 | [`06_verification`](notebooks/06_verification.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SaadH-077/geoverdict/blob/main/notebooks/06_verification.ipynb) | GPU (1 retrain) | Which claims survive ablation, seed variance, and a deliberate demonstration of the random-split trap? |
 
 ## Results
 

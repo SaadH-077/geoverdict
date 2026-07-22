@@ -35,6 +35,58 @@ by IoU. Detection rate and repair quality per failure class is the deliverable.
 
 **Expected runtime:** ~3 minutes, CPU only — no GPU needed for this chapter.
 """),
+    md("""
+### 📦 Where the data in THIS notebook comes from
+
+This is the one chapter whose main input is **generated, not downloaded** —
+and it is important to be clear about that, because everything else in the
+project uses real satellite data.
+
+| Data | Source | How it enters the notebook |
+|---|---|---|
+| **The plot portfolio** (600 farm polygons) | **synthetic — generated in-notebook** by `corrupt.generate_portfolio(...)` using a seeded random number generator | created in memory below; nothing is downloaded |
+| **The "damaged submission"** | **synthetic** — `corrupt.corrupt_portfolio(...)` injects realistic defects into the clean portfolio | created in memory; this is the experiment's input |
+| **Whisp real-world plots** (50 polygons) | **real** — [FAO / Forest Data Partnership *Whisp* project](https://github.com/forestdatapartnership/whisp), file `tests/fixtures/geojson_example.geojson` | downloaded live from GitHub via `urllib` in the reality-check cell |
+
+**Why synthetic here, and only here?** There is no public registry of farm-plot
+boundaries for this deforestation frontier, and — more importantly — to *score*
+a geometry repair you must know the correct answer. So we generate known-good
+plots (the answer key), damage them on purpose with a documented taxonomy, and
+measure how much the pipeline recovers. That is the only way "repair quality"
+becomes a number instead of an opinion. From **chapter 02 onward, every value is
+measured from real Sentinel-2 imagery and real forest maps** over the real land
+under these plot locations — those chapters print their data sources and asset
+versions as they load them.
+"""),
+    md("""
+### 🔌 What actually *is* the input? (the input contract)
+
+"A supplier sends geometries" hides a lot. Real EUDR submissions are not a
+tidy list of polygons — so it is worth being precise about what GeoVerdict
+accepts and how each input variation is handled, because *handling the
+variation is the entire job of this chapter*.
+
+**GeoVerdict's input is a plot portfolio**: a collection of per-plot records,
+each carrying a geometry, an optional declared area, and a shared **sourcing
+region (AOI)**. Here is how every form of input you listed maps into the
+pipeline:
+
+| Input variation the supplier might send | What EUDR / GeoJSON expects | How GeoVerdict handles it |
+|---|---|---|
+| **Polygon / MultiPolygon** | the norm for plots **> 4 ha** (EUDR Art. 9) | validated and repaired directly — the main path |
+| **A single point** | *allowed* for plots **≤ 4 ha** | accepted if declared area ≤ 4 ha (`POINT_GEOMETRY`), then **buffered to a circular footprint** of the declared area so there is an area to observe; a point with declared area **> 4 ha** is rejected (`POINT_TOO_LARGE`) — EUDR requires a polygon there |
+| **Coordinates in the wrong order** (lat,lon) | GeoJSON mandates **lon,lat** | detected as `SWAPPED_AXES` (using the AOI as the "where should this be" reference) and swapped back |
+| **A non-WGS84 CRS** (Web Mercator metres, UTM, national grid) | GeoJSON mandates **EPSG:4326** (WGS84 lon/lat) | flagged `LIKELY_PROJECTED`; Web Mercator is inverted automatically (and *verified* against the AOI); an unidentifiable CRS is routed to manual review — we ask the supplier for the CRS rather than guess |
+| **An area threshold / declared area** | drives the 4 ha point-vs-polygon rule, and sanity bounds | consumed as `declared_area_ha`; also compared against the GIS-measured area to catch gross mismatches |
+| **The sourcing region / AOI** | the country or landscape the plots should fall in | `config.AOI_BBOX` — the expectation that makes `OUTSIDE_AOI` and `SWAPPED_AXES` *detectable at all* (a coordinate is only "misplaced" relative to where it should be) |
+| **File formats** (GeoJSON, Shapefile, KML, WKT, CSV of lat/lon) | — | out of scope for this notebook: `geopandas.read_file` / `shapely.from_wkt` parse all of these into the shapely geometries the validator consumes. GeoVerdict operates on geometries, not file formats |
+
+So the honest one-line answer to *"is the input just polygons?"* is: **no —
+the input is a portfolio of geometries that may be polygons or points, in any
+CRS, correct or corrupted, and the validator's contract is to turn that mess
+into a trustworthy, WGS84, analysable footprint or an explicit refusal.** The
+synthetic portfolio below deliberately exercises every one of these rows.
+"""),
     *bootstrap_cells(),
     md("""
 ### The failure taxonomy

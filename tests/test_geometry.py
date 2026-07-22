@@ -107,3 +107,34 @@ class TestRepairRoundTrip:
         damaged = corrupt.corrupt_swap_axes(clean_plot, rng)
         result = G.repair(damaged, G.validate_geometry(damaged))
         assert result.actions, "an auditable repair must log what it did"
+
+
+class TestViz:
+    """The corruption gallery must draw every corruption, including 3D ones."""
+
+    def test_draw_geom_handles_z_coordinates(self, clean_plot, rng):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from geoverdict import viz
+
+        z_geom = corrupt.corrupt_add_z(clean_plot, rng)  # a polygon with Z
+        assert __import__("shapely").has_z(z_geom)
+        fig, ax = plt.subplots()
+        viz.draw_geom(ax, z_geom)   # must not raise "too many values to unpack"
+        plt.close(fig)
+
+    def test_corruption_gallery_builds_for_all_classes(self, clean_plot, rng):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from geoverdict import viz
+
+        cases = []
+        for name, (fn, _) in corrupt.CORRUPTIONS.items():
+            damaged = fn(clean_plot, rng)
+            res = G.repair(damaged, G.validate_geometry(damaged))
+            cases.append({"name": name, "clean": clean_plot, "corrupted": damaged,
+                          "repaired": res.geometry if res.ok else None, "caption": ""})
+        fig = viz.corruption_gallery(cases, n_cols=4)  # exercises every branch
+        plt.close(fig)

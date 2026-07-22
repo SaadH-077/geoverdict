@@ -31,6 +31,20 @@ phantom loss accumulate into its 2020 answer. JRC classifies 2020 directly.
 Neither is "right" — and the disagreement between them, **measured per plot**,
 is this chapter's finding.
 
+### 📦 Where the data in this notebook comes from
+
+| Data | Source | How it enters the notebook |
+|---|---|---|
+| **JRC Global Forest Cover 2020** | EU Joint Research Centre, hosted on Google Earth Engine (`JRC/GFC2020`) | queried server-side via `earthengine-api`; only per-plot means return |
+| **Hansen Global Forest Change** | Univ. of Maryland, on Earth Engine (`UMD/hansen/global_forest_change_*`) | same — server-side reduction over each plot polygon |
+| **Plot geometries** | `outputs/plots_analysis.geojson` written by chapter 01 | loaded from Drive with `geopandas.read_file` |
+
+**Nothing is downloaded to the notebook.** Earth Engine holds these maps
+(tens of terabytes) and computes "forest fraction inside this polygon" next to
+the data — only ~600 numbers travel back. The exact dataset versions used are
+printed below and saved to `baseline_provenance.json`, because in a compliance
+product *which map vintage said this was forest* is an auditable fact.
+
 **Produces**
 - `outputs/baseline.csv` — per plot: forest fraction (both maps), post-2020 Hansen loss fraction
 - `outputs/baseline_provenance.json` — exact asset versions used
