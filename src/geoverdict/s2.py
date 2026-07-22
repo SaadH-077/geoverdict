@@ -160,6 +160,70 @@ def observe_plot(
     )
 
 
+def geom_view_bbox(geom, margin_frac: float = 0.45, min_span_deg: float = 0.0025):
+    """A square-ish lon/lat window around a geometry, with margin, for display.
+
+    Used to fetch a satellite basemap that shows a plot IN CONTEXT — the plot
+    plus a margin of its surroundings — rather than cropped to its own edge.
+    `min_span_deg` (~275 m) keeps a tiny plot from producing a uselessly
+    zoomed thumbnail.
+    """
+    minx, miny, maxx, maxy = geom.bounds
+    span = max(maxx - minx, maxy - miny, min_span_deg)
+    cx, cy = (minx + maxx) / 2.0, (miny + maxy) / 2.0
+    half = span * (0.5 + margin_frac)
+    return (cx - half, cy - half, cx + half, cy + half)
+
+
+def basemap_rgb(
+    bbox,
+    date_range: str = "2023-01-01/2024-12-31",
+    max_cloud: float = 20.0,
+    max_px: int = 256,
+    url: str = EARTH_SEARCH_URL,
+):
+    """Fetch a true-colour Sentinel-2 basemap over a lon/lat bbox, for display.
+
+    Returns (rgb, bbox, item_id, datetime) where rgb is an (H, W, 3) array
+    percentile-stretched to [0, 1], meant purely for `imshow(rgb, extent=...)`
+    with a geometry drawn on top. Picks the least-cloudy recent scene. Returns
+    (None, bbox, ...) if nothing usable covers the window — the caller reports
+    the gap rather than drawing an empty box.
+
+    This is display-only imagery: the stretch is per-tile and cosmetic, which
+    is exactly why it lives here and nowhere near anything that measures.
+    """
+    try:
+        from pystac_client import Client
+
+        client = Client.open(url)
+        items = sorted(
+            client.search(collections=[COLLECTION], bbox=list(bbox), datetime=date_range,
+                          query={"eo:cloud_cover": {"lt": max_cloud}}, max_items=20).items(),
+            key=lambda it: it.properties.get("eo:cloud_cover", 100.0),
+        )
+    except Exception:
+        # missing pystac/rasterio, network failure, or no items — the caller
+        # draws a "no scene" panel and reports coverage rather than crashing
+        return None, bbox, "", ""
+    if not items:
+        return None, bbox, "", ""
+
+    it = items[0]
+    aspect = (bbox[3] - bbox[1]) / max(bbox[2] - bbox[0], 1e-9)
+    h = max(int(round(max_px * min(aspect, 4.0))), 16)
+    shape = (h, max_px)
+    try:
+        chans = [read_window(it.assets[ASSET_KEYS[b]].href, bbox, shape).astype(np.float32) * 1e-4
+                 for b in ("B04", "B03", "B02")]
+    except Exception:
+        return None, bbox, it.id, str(it.datetime)
+    rgb = np.dstack(chans)
+    lo, hi = np.nanpercentile(rgb, [2, 98])
+    rgb = np.clip((rgb - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+    return rgb, bbox, it.id, str(it.datetime)
+
+
 def least_cloudy_per_period(items: list, periods: list[tuple[str, str]]) -> list:
     """Pick the least-cloudy item inside each (start, end) window.
 

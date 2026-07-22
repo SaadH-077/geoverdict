@@ -87,6 +87,61 @@ def draw_geom(ax, geom, *, facecolor="none", edgecolor=PALETTE["neutral"],
                 label=label if k == 0 else None)
 
 
+def plot_on_basemap(ax, rgb, bbox, geoms_styles, title: str = ""):
+    """Draw one or more geometries over a Sentinel-2 basemap in lon/lat space.
+
+    geoms_styles: list of (geom, style_dict) where style_dict is kwargs for
+    draw_geom. imshow uses extent = the lon/lat bbox and origin='upper' (the
+    read is north-up), so the polygon coordinates and the pixels share one
+    coordinate system and line up by construction.
+    """
+    if rgb is not None:
+        ax.imshow(rgb, extent=[bbox[0], bbox[2], bbox[1], bbox[3]], origin="upper")
+    else:
+        ax.text(0.5, 0.5, "no cloud-free\nscene found", ha="center", va="center",
+                transform=ax.transAxes, fontsize=8, color=PALETTE["insufficient"])
+        ax.set_xlim(bbox[0], bbox[2]); ax.set_ylim(bbox[1], bbox[3])
+    for geom, style in geoms_styles:
+        draw_geom(ax, geom, **style)
+    ax.set_xticks([]); ax.set_yticks([])
+    ax.grid(False)
+    if title:
+        ax.set_title(title, fontsize=9)
+
+
+def repair_before_after(cases: list[dict], title: str = ""):
+    """Paired before/after panels: 'as submitted' vs 'after repair', per case.
+
+    Each case: {name, clean, corrupted, repaired, iou}. Left panel draws the
+    faint intended shape (grey) under the damaged submission (red); right panel
+    draws the same faint intended shape under the repair (green) — so the eye
+    sees the green land back onto the grey. This is the money shot of the
+    chapter: a repair you can visually verify.
+    """
+    n = len(cases)
+    fig, axes = plt.subplots(n, 2, figsize=(7.2, 3.1 * n))
+    axes = np.atleast_2d(axes)
+    for row, case in enumerate(cases):
+        axL, axR = axes[row, 0], axes[row, 1]
+        for ax in (axL, axR):
+            draw_geom(ax, case.get("clean"), edgecolor=PALETTE["insufficient"], lw=2.6, alpha=0.55)
+        draw_geom(axL, case.get("corrupted"), edgecolor=PALETTE["clearing"], lw=1.6)
+        draw_geom(axR, case.get("repaired"), edgecolor=PALETTE["forest"], lw=1.8)
+        axL.set_ylabel(case["name"], fontsize=9, fontweight="bold")
+        if row == 0:
+            axL.set_title("as submitted", fontsize=10, color=PALETTE["clearing"])
+            axR.set_title("after repair", fontsize=10, color=PALETTE["forest"])
+        iou = case.get("iou")
+        axR.set_xlabel(f"IoU vs intended: {iou:.3f}" if iou is not None else "→ manual review",
+                       fontsize=8)
+        for ax in (axL, axR):
+            ax.set_xticks([]); ax.set_yticks([]); ax.set_aspect("equal"); ax.grid(False)
+    if title:
+        fig.suptitle(title, fontweight="bold")
+    fig.tight_layout()
+    return fig
+
+
 def corruption_gallery(cases: list[dict], n_cols: int = 4, title: str = ""):
     """Grid of (clean, corrupted, repaired) overlays, one panel per failure class.
 
