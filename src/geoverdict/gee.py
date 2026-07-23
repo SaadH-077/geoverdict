@@ -298,40 +298,46 @@ def hansen_loss_year_fractions(geoms, ids, batch: int = 120) -> pd.DataFrame:
 
 
 def stable_forest_mask_points(aoi_bbox, n_points: int, seed: int) -> pd.DataFrame:
-    """Sample point locations of TMF 'undisturbed forest throughout' — the
-    hard-negative mine for notebook 04.
+    """Sample point locations of confidently STABLE FOREST — the hard-negative
+    mine for notebook 04.
 
     THE TRICK (and why it matters): a change detector trained on
-    (clearing, random-background) pairs learns 'forest vs everything',
-    not 'change vs no-change'. The negatives that teach the real boundary
-    are STABLE FOREST — textured, dark, high-NDVI chips where nothing
-    happened. TMF's annual undisturbed class, intersected across all
-    post-2019 years, provides exactly those locations. The ablation
-    (train with vs without them) is notebook 04's headline experiment.
+    (clearing, random-background) pairs learns 'forest vs everything', not
+    'change vs no-change'. The negatives that teach the real boundary are
+    STABLE FOREST — textured, dark, high-NDVI chips where nothing happened. The
+    ablation (train with vs without them) is notebook 04's headline experiment.
+
+    Stable forest is defined from the products that already load reliably in
+    chapter 02: a pixel that is forest on BOTH official maps (JRC GFC2020 and
+    Hansen >=30% canopy) AND was never mapped as lost in the entire Hansen
+    record. Requiring agreement between two independent maps plus zero loss is
+    a tight, defensible 'nothing happened here' definition — and it avoids the
+    version-fragile TMF band archaeology the earlier implementation used.
     """
     import ee
 
-    tmf, tmf_id = _first_available(TMF_DEGRADATION_CANDIDATES, "collection")
-    # TMF AnnualChanges class 1 = undisturbed tropical moist forest. Band
-    # naming differs across TMF versions, so rather than per-version band
-    # archaeology we take the FIRST and LAST annual images and require
-    # 'undisturbed' in both — a pixel stable at both ends of the record is a
-    # sound hard-negative location, and the construction survives version
-    # bumps unchanged.
-    imgs = tmf.toList(tmf.size())
-    first = ee.Image(imgs.get(0)).select(0).eq(1)
-    last = ee.Image(imgs.get(-1)).select(0).eq(1)
-    stable = first.And(last).selfMask()
+    jrc_img, jrc_id = _first_available(JRC_GFC2020_CANDIDATES, "mosaic")
+    hansen_img, hansen_id = _first_available(HANSEN_CANDIDATES, "image")
+
+    jrc_bands = jrc_img.bandNames().getInfo()
+    jrc_sel = "Map" if "Map" in jrc_bands else jrc_bands[0]
+    jrc_forest = jrc_img.select(jrc_sel).eq(1)
+    treecover = hansen_img.select("treecover2000").gte(HANSEN_CANOPY_THRESHOLD)
+    never_lost = hansen_img.select("lossyear").eq(0)  # 0 = no loss in any year
+    stable = jrc_forest.And(treecover).And(never_lost).rename("stable").selfMask()
 
     region = ee.Geometry.Rectangle(list(aoi_bbox))
+    # explicit classValues/classPoints so the sampler returns n_points of the
+    # single class; tileScale keeps the request under memory limits
     pts = stable.stratifiedSample(
-        numPoints=n_points, classBand=stable.bandNames().get(0), region=region,
-        scale=30, seed=seed, geometries=True,
+        numPoints=n_points, classBand="stable", classValues=[1],
+        classPoints=[n_points], region=region, scale=30, seed=seed,
+        geometries=True, tileScale=4,
     )
     rows = []
     for f in pts.getInfo()["features"]:
         lon, lat = f["geometry"]["coordinates"]
         rows.append({"lon": lon, "lat": lat})
-    df = pd.DataFrame(rows)
-    df.attrs["assets"] = {"tmf": tmf_id}
+    df = pd.DataFrame(rows, columns=["lon", "lat"])  # keep columns even if empty
+    df.attrs["assets"] = {"jrc": jrc_id, "hansen": hansen_id}
     return df

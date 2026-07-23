@@ -132,6 +132,21 @@ if chip_cache.exists():
     X1, X2 = z["x1"], z["x2"]
     meta = pd.DataFrame({k: z[k] for k in ("sample_id", "kind", "label")})
     t1_ids, t2_ids = z["t1_items"].tolist(), z["t2_items"].tolist()
+    # every sample's longitude drives the spatial split; prefer coords saved in
+    # the cache, and reconstruct for older caches that predate this (plots from
+    # their geometry, hard negatives spread across the AOI — their exact
+    # position is immaterial for a stable-forest negative)
+    if "lon" in z.files:
+        meta["lon"] = z["lon"]
+    else:
+        _plon = plots.set_index("plot_id")
+        _rng = np.random.default_rng(cfg.SEED)
+        meta["lon"] = [
+            float(_plon.loc[sid].geometry.centroid.x)
+            if (kind == "plot" and sid in _plon.index)
+            else float(_rng.uniform(cfg.AOI_BBOX[0], cfg.AOI_BBOX[2]))
+            for sid, kind in zip(meta.sample_id, meta.kind)
+        ]
     print(f"loaded chip cache: {X1.shape}")
 else:
     items = s2.search_items()
@@ -178,9 +193,16 @@ else:
     np.savez_compressed(chip_cache, x1=X1, x2=X2,
                         sample_id=meta.sample_id.to_numpy(), kind=meta.kind.to_numpy(),
                         label=meta.label.to_numpy(),
+                        lon=meta.lon.to_numpy(), lat=meta.lat.to_numpy(),
                         t1_items=np.array(t1_ids), t2_items=np.array(t2_ids))
     print(f"chips: {X1.shape}, coverage {len(meta)}/{len(samples)} samples "
           f"({1 - len(meta)/len(samples):.0%} lost to cloud, reported not hidden)")
+
+print("chip-set composition:", dict(meta.kind.value_counts()))
+if int((meta.kind == "hard_negative").sum()) == 0:
+    print("!! WARNING: no hard-negative chips in this set. The hard-negative ablation "
+          "needs them — delete chips.npz on your Drive and re-run this cell so the "
+          "stable-forest mining rebuilds the chips.")
 """),
     code("""
 import matplotlib.pyplot as plt
@@ -216,13 +238,10 @@ import torch
 from geoverdict import models as M
 from geoverdict import metrics as MT
 
-train_mask_all = np.zeros(len(meta), dtype=bool)
-lon_all = np.array([plots.set_index("plot_id").geometry.centroid.x.get(s, np.nan)
-                    for s in meta.sample_id])
-# hard negatives carry their own lon
-hn = meta.kind.to_numpy() == "hard_negative"
-lon_all[hn] = hard_pts.lon.to_numpy()[
-    [int(s[2:]) for s in meta.sample_id[hn]]]
+# every sample's longitude comes straight from the chip metadata, so the
+# spatial split needs neither the plots frame nor a re-mined hard_pts — and
+# there is no geographic-CRS centroid warning
+lon_all = meta["lon"].to_numpy(dtype=float)
 q1, q2 = np.nanquantile(lon_all, [1/3, 2/3])
 split = np.where(lon_all <= q1, "train", np.where(lon_all <= q2, "val", "test"))
 
