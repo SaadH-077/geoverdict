@@ -94,7 +94,7 @@ chapters load earlier chapters' outputs from your Google Drive.
 | 01 | [`01_geometry_gauntlet`](notebooks/01_geometry_gauntlet.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SaadH-077/geoverdict/blob/main/notebooks/01_geometry_gauntlet.ipynb) | CPU | Which failure classes can we *detect* and how much geometry can we *repair* — measured per class against a known answer key? |
 | 02 | [`02_forest_baseline`](notebooks/02_forest_baseline.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SaadH-077/geoverdict/blob/main/notebooks/02_forest_baseline.ipynb) | CPU + GEE | Was each plot forest at the cutoff — and how often does the answer depend on which official map you consult? |
 | 03 | [`03_timeseries_screening`](notebooks/03_timeseries_screening.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SaadH-077/geoverdict/blob/main/notebooks/03_timeseries_screening.ipynb) | CPU + GEE | When did each plot's forest signal break, from its own six-year NDVI/NBR history — before any deep learning? |
-| 04 | [`04_learned_detector`](notebooks/04_learned_detector.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SaadH-077/geoverdict/blob/main/notebooks/04_learned_detector.ipynb) | **T4 GPU** + GEE | Do *pixels* beat plot-mean series — and does the training data (hard negatives) matter more than the architecture? |
+| 04 | [`04_learned_detector`](notebooks/04_learned_detector.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SaadH-077/geoverdict/blob/main/notebooks/04_learned_detector.ipynb) | CPU + GEE (GPU optional) | Do *pixels* beat plot-mean series — and does the training data (hard negatives) matter more than the architecture? |
 | 05 | [`05_verdicts_evidence`](notebooks/05_verdicts_evidence.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SaadH-077/geoverdict/blob/main/notebooks/05_verdicts_evidence.ipynb) | CPU | What is the defensible verdict per plot, what does it cost in analyst hours, and what does the auditor open? |
 | 06 | [`06_verification`](notebooks/06_verification.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/SaadH-077/geoverdict/blob/main/notebooks/06_verification.ipynb) | GPU (1 retrain) | Which claims survive ablation, seed variance, and a deliberate demonstration of the random-split trap? |
 
@@ -149,7 +149,8 @@ The short form; the long form lives in module docstrings and notebook prose.
 3. Run the notebooks **in order, 01 → 06**. Each mounts Google Drive and
    persists `outputs/` + `figures/` to `MyDrive/geoverdict`, so later
    chapters (and re-runs after a disconnect) pick up where earlier ones left
-   off. Notebook 04 wants a T4 GPU (*Runtime → Change runtime type*).
+   off. Every notebook runs on a **CPU** runtime — the notebook-4 CNN is small
+   enough that a GPU only shaves a few minutes off training and is optional.
 4. Locally: `pip install -r requirements.txt && pytest` (50 tests, no
    geospatial credentials needed — the library core is dependency-light by
    design).

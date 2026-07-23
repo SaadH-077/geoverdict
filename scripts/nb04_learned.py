@@ -43,9 +43,13 @@ than any architecture knob would — that is the finding.
 - `outputs/chips.npz` (cached), `outputs/cnn_seed*.pt`, `outputs/cnn_predictions.csv`
 - `figures/g04_*.png`
 
-**Expected runtime:** first run ~45 min (chip downloads dominate; cached
-afterwards) + ~10 min training on a T4. **Runtime → Change runtime type →
-T4 GPU** before starting.
+**Expected runtime:** first run ~30–45 min, almost all of it the one-off chip
+download (network I/O; cached afterwards). **A GPU is *not* required** — the
+model is small (~200k parameters) and the training set is only a few hundred
+32×32 chips, so all three seeds plus the ablation train in ~3–8 minutes on a
+**CPU** runtime (under a minute on a T4). The code auto-detects the device, so
+CPU is the sensible default here; reach for a T4 only if you later scale the
+training set into the thousands. The chip download costs the same either way.
 """),
     md("""
 ### 📦 Where the data in this notebook comes from
