@@ -130,6 +130,7 @@ def assess_plot(
             f"(JRC {forest_frac_jrc:.0%} vs Hansen {forest_frac_hansen:.0%}) — verdict depends on map choice")
 
     # 3 — observability gate
+    ts_screened = ts_break_detected is not None  # None => plot never time-series screened
     thin_record = ts_obs_density is not None and ts_obs_density < OBS_DENSITY_MIN
     if thin_record and not ts_break_detected and (model_prob is None or model_prob < MODEL_PROB_HIGH):
         v.tier = INSUFFICIENT
@@ -171,6 +172,18 @@ def assess_plot(
                 "in-pipeline detector confirms — vintage or resolution mismatch; needs review")
         return v
 
+    # 5 — no clearing signal fired. Before certifying LOW, insist the plot was
+    # actually screened for change: a plot that was forest at the cutoff but
+    # never time-series screened has not been *checked*, so "no clearing" is
+    # unsupported and the honest tier is INSUFFICIENT, not LOW. (If the learned
+    # arm had flagged it, the MEDIUM branch above would already have returned.)
+    if not ts_screened:
+        v.tier = INSUFFICIENT
+        v.reasons.append(
+            "forest at the cutoff but not screened for post-cutoff change "
+            "(outside the time-series subset) — no basis to certify 'no clearing'")
+        return v
+
     if baselines_disagree or thin_record or geometry_warnings:
         v.tier = MEDIUM
         if thin_record:
@@ -181,6 +194,6 @@ def assess_plot(
 
     v.tier = LOW
     v.reasons.append(
-        "forest at cutoff, monitored throughout, and no detector — statistical or learned — "
-        "found a post-cutoff clearing signal")
+        "forest at cutoff, monitored throughout the post-cutoff window, and no "
+        "detector — statistical or learned — found a clearing signal")
     return v

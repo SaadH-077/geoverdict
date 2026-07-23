@@ -31,6 +31,21 @@ class TestGates:
         v = risk.assess_plot(**base_kwargs(ts_obs_density=0.1))
         assert v.tier == risk.INSUFFICIENT
 
+    def test_unscreened_forest_plot_is_insufficient_not_low(self):
+        # forest at cutoff but never time-series screened (ts fields None) and the
+        # learned arm did not flag it -> we have not actually checked it
+        v = risk.assess_plot(**base_kwargs(ts_break_detected=None, ts_break_date=None,
+                                           ts_obs_density=None, model_prob=0.1,
+                                           hansen_loss_post_frac=0.0))
+        assert v.tier == risk.INSUFFICIENT
+        assert any("not screened" in r for r in v.reasons)
+
+    def test_screened_clean_forest_plot_is_still_low(self):
+        # ts_break_detected == False means screened and no break -> LOW is honest
+        v = risk.assess_plot(**base_kwargs(ts_break_detected=False, ts_obs_density=0.8,
+                                           model_prob=0.1, hansen_loss_post_frac=0.0))
+        assert v.tier == risk.LOW
+
 
 class TestFusion:
     def test_agreeing_detectors_give_high(self):

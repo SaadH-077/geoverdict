@@ -30,9 +30,14 @@ production compliance systems are actually structured.
   baseline; detectors disagree with each other) or confidence is degraded.
 - **HIGH** — forest at cutoff *and* a corroborated post-cutoff clearing.
 - **INSUFFICIENT_EVIDENCE** — the pipeline *admits ignorance*: unrepaired
-  geometry, or too few cloud-free observations to honestly say "no change".
-  This tier is the most important design decision in the file: a silent LOW
-  on an unobservable plot is how non-compliant beef gets certified.
+  geometry, too few cloud-free observations to honestly say "no change", or a
+  plot that was **never time-series screened** (here, one outside the 200-plot
+  detector subset). This tier is the most important design decision in the file:
+  a silent LOW on a plot we never actually *checked* is how non-compliant beef
+  gets certified. Note the consequence below — because only a subset was
+  screened for runtime, the pipeline correctly **abstains** on the rest rather
+  than certifying them unseen. In production every plot is screened and this
+  tier shrinks to the genuinely unobservable ones.
 
 **Produces**
 - `outputs/verdicts.csv`, `outputs/evidence/plot_*.json`, `outputs/dds_summary.json`
@@ -285,12 +290,15 @@ for item in summary["attention_required"][:3]:
 1. **The pipeline ends in a decision, with reasons** — every plot carries a
    tier and the evidence trail that produced it; nothing terminates in a bare
    probability.
-2. **Partial evidence is handled explicitly** — plots outside the
-   time-series subset, or whose chips were clouded out, get verdicts from
-   the evidence that exists, with the gaps named.
+2. **Partial evidence is handled explicitly, and abstention is honest** —
+   a plot that was never time-series screened is *not* quietly certified LOW;
+   it is INSUFFICIENT, because "no clearing" is unsupported when nothing looked.
+   That single rule is what stops the runtime subset from silently laundering
+   unseen plots into "compliant".
 3. **INSUFFICIENT_EVIDENCE is a feature** — the share of the portfolio the
-   optical record genuinely cannot certify is now a measured number with a
-   costed remedy (radar, or another dry season), not a silent LOW.
+   pipeline genuinely cannot certify (unscreened, unobservable, or ungeolocated)
+   is now a measured number with a costed remedy (screen the rest, buy radar,
+   or wait a season), not a silent LOW.
 4. **The evidence bundle is the product**: verdict, series, chips,
    provenance — the artefact a compliance officer, or a court, would open.
 
