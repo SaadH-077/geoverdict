@@ -365,7 +365,7 @@ display(Markdown(report_md))
 att = pd.DataFrame([
     {"plot": v.plot_id, "tier": v.tier.replace("_EVIDENCE", ""),
      "area_ha": round(areas.get(v.plot_id, float("nan")), 1),
-     "leading_reason": (v.reasons[0].split(" — ")[0] if v.reasons else "")}
+     "leading_reason": evidence.leading_reason(v)}
     for v in verdicts if v.tier != "LOW"
 ])
 att["_rank"] = att.tier.map({"HIGH": 0, "MEDIUM": 1, "INSUFFICIENT": 2}).fillna(3)

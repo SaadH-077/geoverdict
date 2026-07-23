@@ -106,6 +106,20 @@ def portfolio_summary(verdicts: list, path: Path | str | None = None) -> dict:
     return summary
 
 
+def leading_reason(verdict) -> str:
+    """The reason that actually DROVE the tier, not a carried-forward caveat.
+
+    Geometry warnings and baseline-disagreement notes are appended before the
+    tier-deciding reason, so `reasons[0]` for a HIGH plot can misleadingly read
+    "geometry warning ..." instead of "sustained spectral breakpoint ...". This
+    prefers the first non-caveat reason so the report headlines the real driver.
+    """
+    caveats = ("geometry warning", "baselines disagree")
+    primary = [r for r in verdict.reasons if not any(c in r for c in caveats)]
+    text = (primary[0] if primary else (verdict.reasons[0] if verdict.reasons else ""))
+    return text.split(" — ")[0].split(" (")[0]
+
+
 # Tier presentation: icon + one-line meaning, ordered for a risk report.
 _TIER_META = [
     ("HIGH", "🟥", "corroborated post-2020 clearing on land that was forest at the cutoff"),
@@ -167,8 +181,7 @@ def format_dds_report(verdicts: list, areas: dict | None = None, review_min: int
                        key=lambda v: rank.get(v.tier, 3))
     for v in attention[:max_rows]:
         area = f"{areas.get(v.plot_id, float('nan')):.1f}" if areas else "—"
-        reason = (v.reasons[0] if v.reasons else "").split(" — ")[0].split(" (")[0]
-        L.append(f"| {v.plot_id} | {v.tier.replace('_EVIDENCE','')} | {area} | {reason[:80]} |")
+        L.append(f"| {v.plot_id} | {v.tier.replace('_EVIDENCE','')} | {area} | {leading_reason(v)[:80]} |")
     if len(attention) > max_rows:
         L.append(f"| … | | | *and {len(attention) - max_rows} more — full list in `dds_summary.json`* |")
 
