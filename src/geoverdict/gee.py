@@ -324,18 +324,20 @@ def stable_forest_mask_points(aoi_bbox, n_points: int, seed: int) -> pd.DataFram
     jrc_forest = jrc_img.select(jrc_sel).eq(1)
     treecover = hansen_img.select("treecover2000").gte(HANSEN_CANOPY_THRESHOLD)
     never_lost = hansen_img.select("lossyear").eq(0)  # 0 = no loss in any year
-    stable = jrc_forest.And(treecover).And(never_lost).rename("stable").selfMask()
+    stable = jrc_forest.And(treecover).And(never_lost).rename("stable")  # 0/1, unmasked
 
+    # SAMPLING: scatter random candidate points, read the stable flag at each,
+    # keep those that landed on stable forest. This is far more reliable than
+    # stratifiedSample on a masked single-class image (which silently returned
+    # zero points); randomPoints and sampleRegions always evaluate, and a 12x
+    # oversample leaves plenty even where stable forest is patchy.
     region = ee.Geometry.Rectangle(list(aoi_bbox))
-    # explicit classValues/classPoints so the sampler returns n_points of the
-    # single class; tileScale keeps the request under memory limits
-    pts = stable.stratifiedSample(
-        numPoints=n_points, classBand="stable", classValues=[1],
-        classPoints=[n_points], region=region, scale=30, seed=seed,
-        geometries=True, tileScale=4,
-    )
+    candidates = ee.FeatureCollection.randomPoints(region=region, points=n_points * 12, seed=seed)
+    sampled = stable.sampleRegions(collection=candidates, scale=30, geometries=True)
+    keep = sampled.filter(ee.Filter.eq("stable", 1)).limit(n_points)
+
     rows = []
-    for f in pts.getInfo()["features"]:
+    for f in keep.getInfo()["features"]:
         lon, lat = f["geometry"]["coordinates"]
         rows.append({"lon": lon, "lat": lat})
     df = pd.DataFrame(rows, columns=["lon", "lat"])  # keep columns even if empty

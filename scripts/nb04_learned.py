@@ -394,46 +394,62 @@ else:
     md("""
 ### The headline experiment: what do hard negatives buy?
 
-Retrain (one seed — the deltas here dwarf seed noise, and the multi-seed
-main result is already banked) with the TMF stable-forest negatives
-**removed** from training. Test set unchanged, including its hard negatives
-— deployment does not remove the confusable forest from the world.
+Retrain (one seed — the deltas here should dwarf seed noise, and the multi-seed
+main result is already banked) with the stable-forest **hard negatives removed**
+from training. The test set is unchanged, including its hard negatives —
+deployment does not remove the confusable forest from the world.
 
-The hypothesis, stated before the result: without hard negatives the model
-meets textured dark forest at test time having rarely seen it labelled
-"no change", and **precision** is what should collapse — false alarms on
-stable forest — while recall barely moves.
+The hypothesis, stated before the result: without hard negatives the model meets
+textured dark forest at test time having rarely seen it labelled "no change",
+and **precision** is what should collapse — false alarms on stable forest —
+while recall barely moves.
+
+**This experiment requires hard negatives in the training set.** If the
+chip-set composition above showed none, the cell below skips the retrain and
+says so rather than dressing up seed noise as a hard-negative effect — mine the
+negatives (delete `chips.npz` and rebuild) before trusting this result.
 """),
     code("""
-no_hn = idx["train"][meta.kind.to_numpy()[idx["train"]] != "hard_negative"]
-cfg.set_seed(cfg.SEEDS[0])
-model_nohn = M.SiameseChangeNet()
-_ = M.fit(model_nohn, make_loader(no_hn, True), make_loader(idx["val"], False),
-          epochs=40, pos_weight=float((lab[no_hn] == 0).sum() / max((lab[no_hn] == 1).sum(), 1)))
-_, z_nohn, _ = M.evaluate(model_nohn, make_loader(idx["test"], False))
-p_nohn = 1 / (1 + np.exp(-z_nohn))
+n_hard_train = int((meta.kind.to_numpy()[idx["train"]] == "hard_negative").sum())
+if n_hard_train == 0:
+    abl = None
+    print("SKIPPED: no hard negatives in the training set, so 'with' and 'without' "
+          "would train on identical data and any difference would be pure seed "
+          "noise. Rebuild the chips with hard negatives to run this experiment.")
+else:
+    no_hn = idx["train"][meta.kind.to_numpy()[idx["train"]] != "hard_negative"]
+    cfg.set_seed(cfg.SEEDS[0])
+    model_nohn = M.SiameseChangeNet()
+    _ = M.fit(model_nohn, make_loader(no_hn, True), make_loader(idx["val"], False),
+              epochs=40, pos_weight=float((lab[no_hn] == 0).sum() / max((lab[no_hn] == 1).sum(), 1)))
+    _, z_nohn, _ = M.evaluate(model_nohn, make_loader(idx["test"], False))
+    p_nohn = 1 / (1 + np.exp(-z_nohn))
 
-rows = []
-for name, sc in (("with hard negatives", cnn_probs), ("without", p_nohn)):
-    thr = MT.threshold_at_recall(y_test, sc, 0.90)
-    m = MT.prf(y_test, sc >= thr)
-    rows.append({"training": name, "precision@r90": m["precision"],
-                 "recall": m["recall"], "pr_auc": MT.pr_auc(y_test, sc)})
-abl = pd.DataFrame(rows)
-print(abl.round(3).to_string(index=False))
+    rows = []
+    for name, sc in (("with hard negatives", cnn_probs), ("without", p_nohn)):
+        thr = MT.threshold_at_recall(y_test, sc, 0.90)
+        m = MT.prf(y_test, sc >= thr)
+        rows.append({"training": name, "precision@r90": m["precision"],
+                     "recall": m["recall"], "pr_auc": MT.pr_auc(y_test, sc)})
+    abl = pd.DataFrame(rows)
+    print(f"(trained with {n_hard_train} hard negatives in the training block)")
+    print(abl.round(3).to_string(index=False))
 
-fig, ax = plt.subplots(figsize=(6, 4))
-ax.bar(abl.training, abl["precision@r90"],
-       color=[viz.PALETTE["forest"], viz.PALETTE["clearing"]])
-for x, v in enumerate(abl["precision@r90"]):
-    ax.text(x, v, f"{v:.2f}", ha="center", va="bottom", fontweight="bold")
-ax.set_ylabel("precision at 90% recall")
-ax.set_title("The data, not the architecture:\\nwhat stable-forest hard negatives buy")
-viz.save(fig, "g04_hard_negative_ablation")
-plt.show()
-cfg.append_result({"notebook": "04", "name": "hard_negative_ablation",
-                   "precision_at_r90_with": float(abl["precision@r90"][0]),
-                   "precision_at_r90_without": float(abl["precision@r90"][1])})
+if abl is not None:
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.bar(abl.training, abl["precision@r90"],
+           color=[viz.PALETTE["forest"], viz.PALETTE["clearing"]])
+    for x, v in enumerate(abl["precision@r90"]):
+        ax.text(x, v, f"{v:.2f}", ha="center", va="bottom", fontweight="bold")
+    ax.set_ylabel("precision at 90% recall")
+    ax.set_title("The data, not the architecture:\\nwhat stable-forest hard negatives buy")
+    viz.save(fig, "g04_hard_negative_ablation")
+    plt.show()
+    cfg.append_result({"notebook": "04", "name": "hard_negative_ablation",
+                       "precision_at_r90_with": float(abl["precision@r90"][0]),
+                       "precision_at_r90_without": float(abl["precision@r90"][1])})
+else:
+    print("ablation figure skipped — no hard negatives to compare (see note above)")
 """),
     md("""
 ### Calibration — because chapter 05 consumes these probabilities
