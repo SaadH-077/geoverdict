@@ -174,6 +174,18 @@ We run the full validator over all 50 (with the AOI check disabled — these
 plots are global, so "outside the sourcing region" is meaningless here). This
 is a genuine result, not a manufactured one: whatever the validator flags, it
 found in real submission data.
+
+**A calibration lesson from real data.** An earlier version of this validator
+used a `MIN_PLOT_HA = 0.5` floor and flagged six of these real plots as
+`TOO_SMALL` — but they are **0.16–0.50 ha legitimate smallholder plots**, not
+errors. EUDR explicitly accommodates plots ≤ 4 ha (a point is allowed), so
+sub-hectare plots are the *norm* for the population this project targets;
+rejecting them would be a false positive on exactly the plots that matter most.
+So the floor is now set at the **Sentinel-2 observability limit (0.1 ha ≈ 10
+pixels)** — below that a per-plot reflectance mean genuinely cannot be trusted.
+This is the whole point of testing on real data: the synthetic benchmark in
+Part B could never have caught it, because there we chose both the threshold
+*and* the plot sizes.
 """),
     code("""
 whisp_issues = G.validate_portfolio(whisp, aoi_bbox=None)

@@ -88,9 +88,17 @@ N_PLOTS = 600            # portfolio size: large enough for stable rates,
                          # small enough to screen on free Colab
 CORRUPTION_RATE = 0.45   # fraction of plots that arrive damaged — deliberately
                          # pessimistic so every failure class has enough samples
-MIN_PLOT_HA = 0.5        # below this we treat the polygon as a digitising slip
-MAX_PLOT_HA = 1000.0     # above this a "farm plot" is almost certainly a unit
-                         # or digitising error (1,000 ha = 10 km^2)
+# The too-small floor is set at the SATELLITE OBSERVABILITY LIMIT, not an
+# arbitrary "looks small" value — a calibration the real Whisp data forced.
+# EUDR explicitly accommodates plots <= 4 ha (points allowed), so sub-hectare
+# smallholder plots are the norm for the population this project targets, and
+# rejecting them would be a false positive on exactly the plots that matter.
+# 0.1 ha = 10 Sentinel-2 pixels (10 m), roughly the minimum a per-plot
+# reflectance mean can be trusted over. Below that a plot is genuinely
+# un-analysable (a digitising slip), so TOO_SMALL stays an ERROR there.
+MIN_PLOT_HA = 0.1
+MAX_PLOT_HA = 1000.0     # above this a single "farm plot" is likely a merge or
+                         # unit error; flagged for review, not silently rejected
 
 # --------------------------------------------------------------------------
 # Sentinel-2 bands used for chips (notebooks 03-04)
