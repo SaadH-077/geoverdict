@@ -112,7 +112,10 @@ gee.init(project=EE_PROJECT or None)
 N_HARD = 150
 hard_pts = gee.stable_forest_mask_points(cfg.AOI_BBOX, N_HARD, seed=cfg.SEED)
 print(f"mined {len(hard_pts)} stable-forest hard-negative locations "
-      f"(TMF asset: {hard_pts.attrs.get('assets')})")
+      f"(from {hard_pts.attrs.get('assets')})")
+if len(hard_pts) == 0:
+    print("!! mining returned no points — the hard-negative ablation cannot run. "
+          "Send this output back so the sampling can be adjusted.")
 """),
     md("""
 ### Chips via STAC windowed reads (cached to Drive)

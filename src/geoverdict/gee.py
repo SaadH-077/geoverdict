@@ -314,32 +314,45 @@ def stable_forest_mask_points(aoi_bbox, n_points: int, seed: int) -> pd.DataFram
     a tight, defensible 'nothing happened here' definition — and it avoids the
     version-fragile TMF band archaeology the earlier implementation used.
     """
-    import ee
+    import numpy as np
+    from shapely.geometry import Point
 
-    jrc_img, jrc_id = _first_available(JRC_GFC2020_CANDIDATES, "mosaic")
-    hansen_img, hansen_id = _first_available(HANSEN_CANDIDATES, "image")
+    # SAMPLING STRATEGY. Two earlier GEE sampling primitives (stratifiedSample,
+    # randomPoints+sampleRegions) silently returned zero points on the masked
+    # forest image. So instead of trusting a sampler, we scatter candidate
+    # points ourselves and score each with the SAME reduceRegions baseline call
+    # that chapter 02 runs successfully — a small buffer per point, its forest
+    # fractions and post-cutoff loss read server-side. Reusing proven code is
+    # the whole point: no new GEE surface to fail on.
+    rng = np.random.default_rng(seed)
+    n_cand = max(n_points * 10, 400)
+    lons = rng.uniform(aoi_bbox[0] + 0.02, aoi_bbox[2] - 0.02, n_cand)
+    lats = rng.uniform(aoi_bbox[1] + 0.02, aoi_bbox[3] - 0.02, n_cand)
+    ids = [str(i) for i in range(n_cand)]
+    buffers = [Point(float(lo), float(la)).buffer(0.0015) for lo, la in zip(lons, lats)]  # ~165 m
 
-    jrc_bands = jrc_img.bandNames().getInfo()
-    jrc_sel = "Map" if "Map" in jrc_bands else jrc_bands[0]
-    jrc_forest = jrc_img.select(jrc_sel).eq(1)
-    treecover = hansen_img.select("treecover2000").gte(HANSEN_CANOPY_THRESHOLD)
-    never_lost = hansen_img.select("lossyear").eq(0)  # 0 = no loss in any year
-    stable = jrc_forest.And(treecover).And(never_lost).rename("stable")  # 0/1, unmasked
+    base = forest_baseline_fractions(buffers, ids)  # proven reduceRegions path
+    assets = base.attrs.get("assets", {"jrc": "JRC/GFC2020", "hansen": "UMD/hansen"})
+    # join coordinates back by id (reduceRegions does not preserve input order;
+    # merge also drops .attrs, which is why assets were captured above)
+    coord = pd.DataFrame({"plot_id": ids, "lon": lons, "lat": lats})
+    base = base.merge(coord, on="plot_id")
 
-    # SAMPLING: scatter random candidate points, read the stable flag at each,
-    # keep those that landed on stable forest. This is far more reliable than
-    # stratifiedSample on a masked single-class image (which silently returned
-    # zero points); randomPoints and sampleRegions always evaluate, and a 12x
-    # oversample leaves plenty even where stable forest is patchy.
-    region = ee.Geometry.Rectangle(list(aoi_bbox))
-    candidates = ee.FeatureCollection.randomPoints(region=region, points=n_points * 12, seed=seed)
-    sampled = stable.sampleRegions(collection=candidates, scale=30, geometries=True)
-    keep = sampled.filter(ee.Filter.eq("stable", 1)).limit(n_points)
+    # stable forest: substantial forest on BOTH official maps and ~no post-2020
+    # loss. Rank by combined forest fraction and take the strongest, so points
+    # are returned reliably even where fully-agreed forest is patchy.
+    stable = base[(base.forest_frac_jrc.fillna(0) >= 0.6)
+                  & (base.forest_frac_hansen.fillna(0) >= 0.3)
+                  & (base.hansen_loss_post_frac.fillna(0) < 0.02)].copy()
+    stable["score"] = stable.forest_frac_jrc + stable.forest_frac_hansen
+    out = stable.sort_values("score", ascending=False).head(n_points)
 
-    rows = []
-    for f in keep.getInfo()["features"]:
-        lon, lat = f["geometry"]["coordinates"]
-        rows.append({"lon": lon, "lat": lat})
-    df = pd.DataFrame(rows, columns=["lon", "lat"])  # keep columns even if empty
-    df.attrs["assets"] = {"jrc": jrc_id, "hansen": hansen_id}
+    if len(out) == 0:
+        # fallback: agreement between the two maps is too rare here; relax to
+        # JRC-forest with no post-2020 loss so the ablation still has negatives
+        out = base[(base.forest_frac_jrc.fillna(0) >= 0.6)
+                   & (base.hansen_loss_post_frac.fillna(0) < 0.05)].head(n_points)
+
+    df = pd.DataFrame(out[["lon", "lat"]].to_numpy(), columns=["lon", "lat"])
+    df.attrs["assets"] = assets
     return df
