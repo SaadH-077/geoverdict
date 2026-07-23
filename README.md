@@ -50,9 +50,14 @@ deforestation frontier (Novo Progresso, Pará, Brazil), using only free and
 public data. It is an independent study project, inspired by the class of
 problems EUDR-compliance teams work on; it uses no proprietary code or data.
 
-> 🟢 **New to satellites or machine learning?** Read **[EXPLAINER.md](EXPLAINER.md)**
-> — a complete, plain-language walkthrough of the whole project with every
-> abbreviation spelled out, written for someone with zero background.
+<p align="center">
+<img src="docs/img/g01_whisp_on_imagery.png" width="88%" alt="Real EUDR farm plots shown on real Sentinel-2 imagery"/>
+<br/>
+<sub><b>What the data really looks like.</b> Real EUDR submission plots (orange
+outlines) on real Sentinel-2 imagery — intact forest in Central Africa, cleared
+field mosaics in Brazil, a cloud-flecked plot near Singapore. Chapter 01 opens
+here: the input is genuine, messy, global farm geometry over real satellite pixels.</sub>
+</p>
 
 ## What the input actually is
 
@@ -162,6 +167,91 @@ them against the ledger. Headline results by chapter:
    (6 MAD) was **too conservative**: a 3-MAD threshold roughly doubles F1 by
    trading a little precision for a lot of recall. Reporting that your own
    default was suboptimal is the point of a verification chapter.
+
+## The analysis in pictures
+
+**Chapter 01 — geometry repair, verified on real imagery.** Break a clean farm
+shape in every known way, then repair it and measure the overlap (IoU) against
+the intended shape. Grey = intended, red = as submitted, green = repaired.
+
+<p align="center"><img src="docs/img/g01_before_after.png" width="62%" alt="Before/after geometry repair with IoU scores"/></p>
+
+**Chapter 02 — the standout finding: the two official maps disagree.** Every plot
+coloured by its 2020 forest fraction, left = JRC GFC2020, right = Hansen, over
+the real frontier. JRC (mean 43%) calls far more of it forest than Hansen (12%),
+because Hansen cannot see post-2000 regrowth — a ~39% verdict disagreement.
+
+<p align="center"><img src="docs/img/g02_fraction_maps.png" width="92%" alt="Per-plot forest fraction: JRC vs Hansen on Sentinel-2"/></p>
+
+**Chapter 03 — learning beats hand-tuning.** Precision/recall of the hand-tuned
+detector vs the random forest on the same spatially-blocked test plots (left),
+and the analyst-workload cost of screening at each recall target (right).
+
+<p align="center"><img src="docs/img/g03_pr_and_cost.png" width="92%" alt="PR curves (detector vs RF) and screening cost"/></p>
+
+**Chapter 04 — the honest negative.** The deep-learning CNN (two dates) lands
+*below* the classical arms: for forest loss, the full temporal trajectory beats
+a single before/after image pair.
+
+<p align="center"><img src="docs/img/g04_pr_comparison.png" width="55%" alt="CNN vs statistics detector PR curves — CNN loses"/></p>
+
+**Chapter 05 — how every verdict is reached, and the portfolio it produces.**
+The decision cascade with live counts (left): each plot exits to a tier the
+moment a gate decides it. The portfolio map and tier distribution (right).
+
+<p align="center">
+<img src="docs/img/g05_decision_flow.png" width="60%" alt="Verdict decision cascade with live counts"/>
+<img src="docs/img/g05_verdict_map.png" width="38%" alt="Portfolio verdict map and tier distribution"/>
+</p>
+
+**Chapter 05 — the auditor's evidence bundle.** For every flagged plot, a
+one-page record: verdict and reasons, before/after chips, the NDVI/NBR time
+series with the detected breakpoint, and full data provenance.
+
+<p align="center"><img src="docs/img/g05_evidence_high.png" width="82%" alt="Per-plot evidence bundle for an auditor"/></p>
+
+**Chapter 06 — the pipeline audits itself.** Sweeping the detector's knobs
+reveals the reasoned default (6 MAD, ringed) was too conservative — a gentler
+3-MAD threshold roughly doubles F1.
+
+<p align="center"><img src="docs/img/g06_detector_sweep.png" width="88%" alt="Detector knob sweep: PR trade-off and F1 heatmap"/></p>
+
+## The Due Diligence report (auto-generated)
+
+Chapter 05 emits a formatted **EUDR screening summary** — the portfolio-level
+document a compliance officer reads before signing a Due Diligence Statement
+(saved to `outputs/dds_report.md`). The real output from this run:
+
+> # EUDR Due Diligence — Screening Summary
+>
+> **Framework:** EUDR (Regulation (EU) 2023/1115) · **Deforestation cut-off:** 31 December 2020
+> **Portfolio:** 501 land parcels · 3,763 ha total
+>
+> **Risk overview**
+>
+> | | Tier | Parcels | Share | Assessment |
+> |:--:|:--|--:|--:|:--|
+> | 🟥 | **HIGH** | 11 | 2% | corroborated post-2020 clearing on land that was forest at the cutoff |
+> | ⚠️ | **MEDIUM** | 205 | 41% | conflicting or partial evidence — human review required |
+> | ◻️ | **INSUFFICIENT** | 96 | 19% | not screened or unobservable — the pipeline abstains |
+> | ✅ | **LOW** | 189 | 38% | negligible risk — no post-cutoff clearing found |
+>
+> **Cleared automatically (LOW):** 189 parcels (38%). **Require human review:**
+> 312 parcels (62%) — ≈ 156 analyst-hours per 1,000 parcels at 15 min each.
+>
+> **Parcels requiring attention** (HIGH first, by area)
+>
+> | Parcel | Tier | Area (ha) | Leading reason |
+> |:--|:--|--:|:--|
+> | 61 | HIGH | 24.1 | sustained spectral breakpoint at 2024-08-01 on land that was forest at the cutoff |
+> | 40 | HIGH | 9.8 | sustained spectral breakpoint at 2024-10-01 on land that was forest at the cutoff |
+> | 482 | HIGH | 6.8 | sustained spectral breakpoint at 2024-09-01 on land that was forest at the cutoff |
+> | 100 | HIGH | 6.3 | sustained spectral breakpoint at 2021-08-01 on land that was forest at the cutoff |
+> | … | | | *and 301 more — full list in `dds_summary.json`* |
+>
+> *Screening evidence only — not a legal determination. Every HIGH / MEDIUM /
+> INSUFFICIENT parcel must be resolved by a human before a DDS is signed. Full
+> per-parcel evidence bundles are in `outputs/evidence/`.*
 
 ## Did the project succeed?
 

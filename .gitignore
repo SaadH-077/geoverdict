@@ -20,3 +20,5 @@ venv/
 .env
 *.json.key
 service-account*.json
+EXPLAINER.md
+geoverdict_results.zip
