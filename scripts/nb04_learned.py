@@ -407,22 +407,23 @@ else:
     print("no test-set examples to show")
 """),
     md("""
-### The headline experiment: what do hard negatives buy?
+### The hard-negative experiment — and whether it reproduces the cocoa result
 
-Retrain (one seed — the deltas here should dwarf seed noise, and the multi-seed
-main result is already banked) with the stable-forest **hard negatives removed**
-from training. The test set is unchanged, including its hard negatives —
-deployment does not remove the confusable forest from the world.
+Retrain a single seed with the stable-forest **hard negatives removed** from the
+training block, holding everything else fixed, against the same seed trained with
+them. The test set is unchanged, including its hard negatives — deployment does
+not remove the confusable forest from the world.
 
-The hypothesis, stated before the result: without hard negatives the model meets
-textured dark forest at test time having rarely seen it labelled "no change",
-and **precision** is what should collapse — false alarms on stable forest —
-while recall barely moves.
+The hypothesis, from the AGILE cocoa paper: without hard negatives the model
+meets textured dark forest at test time having rarely seen it labelled "no
+change", so **precision** should suffer. In that study, removing them collapsed
+precision from 98% to 51%. Whether that survives contact with *this* small,
+data-starved CNN is the experiment — and a *null* result is a real, reportable
+answer, not a failed reproduction. The takeaways discuss what the numbers say.
 
 **This experiment requires hard negatives in the training set.** If the
 chip-set composition above showed none, the cell below skips the retrain and
-says so rather than dressing up seed noise as a hard-negative effect — mine the
-negatives (delete `chips.npz` and rebuild) before trusting this result.
+says so rather than dressing up seed noise as a hard-negative effect.
 """),
     code("""
 n_hard_train = int((meta.kind.to_numpy()[idx["train"]] == "hard_negative").sum())
@@ -568,12 +569,18 @@ plt.show()
    forest-loss detection *temporal depth beats spatial texture*. A manufactured
    "CNN wins" would have been the wrong lesson to carry into an interview; this
    is the right one.
-2. **Hard negatives still help — data over architecture, even in a losing
-   arm.** In a clean single-seed ablation (same seed, only the stable-forest
-   negatives differ), adding them lifted the CNN's PR-AUC (ledger). The training
-   *data* moved the result more than any architecture knob touched here — the
-   same lesson the AGILE cocoa paper draws, and it holds even where the model
-   loses overall.
+2. **Hard negatives barely moved *this* CNN — a divergence from the cocoa paper
+   worth discussing.** In a clean single-seed ablation (same seed, only the
+   stable-forest negatives differ), adding ~47 of them changed PR-AUC by ~0.01
+   and left precision flat (ledger). That is a sharp contrast with the AGILE
+   paper, where removing hard negatives collapsed precision from 98% to 51%. The
+   most likely reason is **scale**: that study trained on far more data, whereas
+   this arm is starved — ~42 positives, a small CNN, only two dates — so it is
+   information-limited long before hard negatives become the bottleneck.
+   Disagreeing with a published result *because your own evidence says so*, with
+   a hypothesis for why, is the honest position — not a failure to reproduce.
+   (The earlier, larger delta was an artefact of comparing a 3-seed ensemble to
+   a single seed; the clean single-seed comparison removes that confound.)
 3. **Confidences were calibrated** so chapter 05 can consume them as
    probabilities (a small temperature; ECE before/after in the ledger).
 4. **What a production system does next** — not choose between pixels and time
