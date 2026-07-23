@@ -185,28 +185,39 @@ SWIR — the two shifts add up in the ratio), which is why the detector runs on
 NBR by default and NDVI is the cross-check.
 """),
     code("""
+cutoff_ts = pd.Timestamp(cfg.CUTOFF_DATE)
 det_rows = []
 for pid in sub.plot_id:
-    r_nbr = ts.detect_break(monthly_df[(pid, "nbr")], cfg.CUTOFF_DATE)
+    nbr = monthly_df[(pid, "nbr")]
+    r_nbr = ts.detect_break(nbr, cfg.CUTOFF_DATE)
     r_ndvi = ts.detect_break(monthly_df[(pid, "ndvi")], cfg.CUTOFF_DATE)
+
+    # Graded SCREENING score: how many MADs below the plot's own pre-cutoff
+    # baseline the NBR fell after the cutoff. Positive for ANY drop and larger
+    # for bigger drops, so a partial clearing (diluted in the plot mean, and
+    # invisible to the strict binary detector) still ranks above stable forest.
+    # This is the tunable screening signal; the binary flag is its most
+    # conservative operating point. (The 5th percentile, not the raw minimum,
+    # so one cloud-contaminated month cannot manufacture a score.)
+    post = nbr[nbr.index > cutoff_ts].to_numpy(dtype=float)
+    if np.isnan(r_nbr.baseline_median) or not np.isfinite(post).any():
+        score = 0.0
+    else:
+        post_low = float(np.nanpercentile(post, 5))
+        score = max(0.0, (r_nbr.baseline_median - post_low) / max(r_nbr.baseline_mad, 0.02))
+
     det_rows.append({
-        "plot_id": pid,
-        "break_detected": r_nbr.detected,
-        "break_date": r_nbr.break_date,
-        "magnitude": r_nbr.magnitude,
-        "obs_density": r_nbr.obs_density,
+        "plot_id": pid, "break_detected": r_nbr.detected, "break_date": r_nbr.break_date,
+        "magnitude": r_nbr.magnitude, "obs_density": r_nbr.obs_density,
         "baseline_median_nbr": r_nbr.baseline_median,
-        "ndvi_agrees": r_ndvi.detected == r_nbr.detected,
-        # a continuous score for PR analysis: how far below threshold the
-        # series went, in MAD units (0 when never below)
-        "score": max(0.0, (r_nbr.threshold - float(np.nanmin(
-            monthly_df[(pid, "nbr")][monthly_df[(pid, "nbr")].index > pd.Timestamp(cfg.CUTOFF_DATE)]
-        ))) / max(r_nbr.baseline_mad, 1e-3)) if not np.isnan(r_nbr.baseline_median) else 0.0,
+        "ndvi_agrees": r_ndvi.detected == r_nbr.detected, "score": score,
     })
 detections = pd.DataFrame(det_rows)
 detections.to_csv(cfg.OUTPUT_DIR / "ts_detections.csv", index=False)
 print(detections.break_detected.value_counts())
 print(f"NDVI/NBR detector agreement: {detections.ndvi_agrees.mean():.0%}")
+print(f"screening score range: {detections.score.min():.1f} to {detections.score.max():.1f} "
+      f"(graded, not 0/1)")
 """),
     code("""
 sub_l = sub.set_index("plot_id")
@@ -246,13 +257,20 @@ error modes (annual dating, 30 m edges) are known and discussed where they
 bite. Plots in Hansen's ambiguous 2–20% band are excluded from scoring —
 grading against a referee who is guessing teaches nothing.
 
-Two evaluations:
-1. **Screening quality** — precision/recall of the binary flag, the PR curve
-   over the continuous score, and the business table: flags per 1,000 plots
-   at fixed recall.
+Two evaluations, and one thing to watch for:
+1. **Screening quality** — the binary flag is one *operating point* (deliberately
+   conservative); the graded score is the tunable screen. We report both the
+   binary precision/recall and the PR curve + business table over the score.
 2. **Date agreement** — for true positives, our breakpoint month vs Hansen's
-   loss year. Hansen dates to a calendar year, so ±1 year is the honest
-   success criterion.
+   loss year (±1 year is the honest bar — Hansen dates to a calendar year).
+
+**Expect the binary detector to be high-precision, low-recall**, and understand
+*why*: it fires only on a sustained ~6-MAD drop, which a *full-plot* clearing
+produces — but a plot that is only 25–40% cleared has its signal **diluted in
+the plot mean** and never reaches that bar. That is not a bug; it is the
+fundamental limit of plot-averaged time series, and it is exactly the gap the
+pixel-level CNN in chapter 04 exists to close. The graded score and the random
+forest below both recover much of that missed signal from the *same* data.
 """ ),
     code("""
 from geoverdict import metrics as M
@@ -266,9 +284,11 @@ scores = eval_df.score.to_numpy()
 
 m = M.prf(y_true, y_flag)
 print(f"statistics arm vs Hansen reference (n={len(eval_df)}, {y_true.sum()} positives):")
-print(f"  precision {m['precision']:.3f}   recall {m['recall']:.3f}   F1 {m['f1']:.3f}")
-print(f"  PR-AUC over the continuous score: {M.pr_auc(y_true, scores):.3f}")
+print(f"  binary detector (conservative operating point):")
+print(f"    precision {m['precision']:.3f}   recall {m['recall']:.3f}   F1 {m['f1']:.3f}")
+print(f"  graded score, threshold-free:  PR-AUC {M.pr_auc(y_true, scores):.3f}")
 print()
+print("  tunable screen — pick the operating point by policy:")
 screen = pd.DataFrame(M.screening_table(y_true, scores))
 print(screen.round(3).to_string(index=False))
 
@@ -342,7 +362,10 @@ for pid in eval_df.plot_id:
 X = pd.DataFrame(feat_rows, index=feat_ids)
 y = (eval_df.set_index("plot_id").loc[X.index, "hansen_loss_post_frac"] > cfg.POS_LOSS_FRAC).to_numpy()
 
-lon = sub.set_index("plot_id").loc[X.index].geometry.centroid.x
+# plot longitude for the spatial split, per-geometry to avoid the geographic-CRS
+# centroid warning (exact enough for a west/east split)
+geoms_by_id = sub.set_index("plot_id").loc[X.index].geometry
+lon = pd.Series([g.centroid.x for g in geoms_by_id], index=X.index)
 q1, q2 = lon.quantile([1/3, 2/3])
 test_mask = (lon > q2).to_numpy()          # eastern third held out
 train_mask = ~test_mask
@@ -375,25 +398,31 @@ cfg.append_result({"notebook": "03", "name": "rf_vs_detector",
     md("""
 ### What this chapter established
 
-1. **A transparent detector screens surprisingly well** — the exact
-   precision/recall/PR-AUC numbers are in the ledger; the point is the
-   *shape*: near-total recall on large clear-cuts, with misses concentrated
-   where observation density is low or the clearing is partial.
-2. **Detection dates line up with the independent reference** to within the
-   ±1 year that Hansen's annual dating permits — which is what makes the
-   breakpoint usable as evidence against the 2020-12-31 cutoff.
-3. **The wet season is a measured blind spot, not an anecdote** — and its
-   size is exactly why chapter 05's verdict layer has an
-   INSUFFICIENT_EVIDENCE tier instead of pretending "not seen" means "not
-   cleared".
-4. **The learned-vs-hand-set comparison** (RF vs detector, same features,
-   spatially-blocked) tells us how much signal the thresholds leave behind —
-   the honest number is in the ledger and discussed against the deep model in
-   chapter 04.
+1. **The binary detector is precise but conservative** — it fires only on a
+   sustained full-plot drop, so it flags a minority of clearings at very high
+   precision. That is the right bias for *confident event dating* (its breaks
+   feed the evidence bundle), and the wrong bias for screening — which is why
+   the graded score exists.
+2. **Plot-mean series miss partial clearings — a measured limit, not a
+   failure.** A plot cleared 25–40% has its signal diluted in the mean and
+   never reaches the detector's bar. This is the single most important finding
+   of the chapter, because it is exactly what motivates the pixel-level CNN in
+   chapter 04: you cannot recover sub-plot clearing from a plot average.
+3. **Learning the boundary recovers much of the missed signal from the *same*
+   data.** The random forest on temporal features markedly beats the
+   hand-tuned detector's PR-AUC on a **spatially-blocked** test set (numbers in
+   the ledger) — proof the signal was there and the fixed thresholds were
+   leaving it on the table.
+4. **Detection dates line up with the independent Hansen reference** to within
+   the ±1 year its annual dating permits — what makes the breakpoint usable as
+   evidence against the 2020-12-31 cutoff.
+5. **The wet season is a measured blind spot** (quantified gap rate) — the
+   reason chapter 05's verdict layer has an INSUFFICIENT_EVIDENCE tier rather
+   than reading "not seen" as "not cleared".
 
 **Next:** the learned arm proper — a siamese CNN that looks at the *pixels*
-(before/after chips) instead of plot-mean series, which is where partial
-clearings and sub-plot patterns live.
+(before/after chips) instead of plot-mean series, which is exactly where the
+partial clearings this chapter could not see actually live.
 """),
 ]
 
