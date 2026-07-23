@@ -180,15 +180,23 @@ def basemap_rgb(
     date_range: str = "2023-01-01/2024-12-31",
     max_cloud: float = 20.0,
     max_px: int = 256,
+    compose: int = 4,
     url: str = EARTH_SEARCH_URL,
 ):
     """Fetch a true-colour Sentinel-2 basemap over a lon/lat bbox, for display.
 
     Returns (rgb, bbox, item_id, datetime) where rgb is an (H, W, 3) array
     percentile-stretched to [0, 1], meant purely for `imshow(rgb, extent=...)`
-    with a geometry drawn on top. Picks the least-cloudy recent scene. Returns
-    (None, bbox, ...) if nothing usable covers the window — the caller reports
-    the gap rather than drawing an empty box.
+    with a geometry drawn on top. Returns (None, bbox, ...) if nothing usable
+    covers the window — the caller reports the gap rather than drawing an empty
+    box.
+
+    COMPOSITING. A single Sentinel-2 scene is 110x110 km, so it covers a small
+    plot fully but may only partially overlap a large AOI window, leaving
+    no-data gaps. `compose` reads up to N least-cloudy scenes and fills each
+    pixel from the first scene that has data there — a simple most-recent-valid
+    mosaic that gives full coverage for wide windows while staying cheap for
+    small ones (it stops as soon as the window is covered).
 
     This is display-only imagery: the stretch is per-tile and cosmetic, which
     is exactly why it lives here and nowhere near anything that measures.
@@ -199,7 +207,7 @@ def basemap_rgb(
         client = Client.open(url)
         items = sorted(
             client.search(collections=[COLLECTION], bbox=list(bbox), datetime=date_range,
-                          query={"eo:cloud_cover": {"lt": max_cloud}}, max_items=20).items(),
+                          query={"eo:cloud_cover": {"lt": max_cloud}}, max_items=30).items(),
             key=lambda it: it.properties.get("eo:cloud_cover", 100.0),
         )
     except Exception:
@@ -209,19 +217,38 @@ def basemap_rgb(
     if not items:
         return None, bbox, "", ""
 
-    it = items[0]
     aspect = (bbox[3] - bbox[1]) / max(bbox[2] - bbox[0], 1e-9)
     h = max(int(round(max_px * min(aspect, 4.0))), 16)
     shape = (h, max_px)
-    try:
-        chans = [read_window(it.assets[ASSET_KEYS[b]].href, bbox, shape).astype(np.float32) * 1e-4
-                 for b in ("B04", "B03", "B02")]
-    except Exception:
-        return None, bbox, it.id, str(it.datetime)
-    rgb = np.dstack(chans)
-    lo, hi = np.nanpercentile(rgb, [2, 98])
-    rgb = np.clip((rgb - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
-    return rgb, bbox, it.id, str(it.datetime)
+
+    composite = None
+    filled = None
+    primary = items[0]
+    for it in items[: max(compose, 1)]:
+        try:
+            chans = [read_window(it.assets[ASSET_KEYS[b]].href, bbox, shape).astype(np.float32) * 1e-4
+                     for b in ("B04", "B03", "B02")]
+        except Exception:
+            continue
+        rgb_i = np.dstack(chans)
+        valid_i = rgb_i.sum(axis=2) > 0  # boundless reads fill no-data with 0
+        if composite is None:
+            composite, filled = rgb_i, valid_i
+        else:
+            gap = (~filled) & valid_i
+            composite[gap] = rgb_i[gap]
+            filled = filled | valid_i
+        if filled.mean() > 0.98:  # window essentially covered — stop reading
+            break
+    if composite is None:
+        return None, bbox, primary.id, str(primary.datetime)
+
+    valid = composite.sum(axis=2) > 0
+    if valid.any():
+        lo, hi = np.nanpercentile(composite[valid], [2, 98])
+        composite = np.clip((composite - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+    composite[~valid] = np.nan  # let no-data render transparent, not black
+    return composite, bbox, primary.id, str(primary.datetime)
 
 
 def least_cloudy_per_period(items: list, periods: list[tuple[str, str]]) -> list:

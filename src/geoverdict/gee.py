@@ -28,6 +28,7 @@ import pandas as pd
 from . import config as cfg
 
 HANSEN_CANDIDATES = [
+    "UMD/hansen/global_forest_change_2025_v1_13",
     "UMD/hansen/global_forest_change_2024_v1_12",
     "UMD/hansen/global_forest_change_2023_v1_11",
 ]

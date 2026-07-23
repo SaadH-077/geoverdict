@@ -158,20 +158,15 @@ viz.save(fig, "g02_forest_fractions")
 plt.show()
 """),
     md("""
-### The finding: how often does the compliance answer depend on the map?
+### The finding: does the compliance answer depend on which map you trust?
 
 We call a plot "forest at cutoff" when its forest fraction crosses 30% (the
-same constant the verdict layer uses, chosen so that clearing the forested
-part of a mixed plot still registers). The number that matters is the share
-of plots whose forest/non-forest **status flips between the two maps** — and,
-separately, the share that flips when only Hansen's canopy-definition knob
-moves between 10% and 50%.
-
-Also broken out by plot size, for a structural reason worth predicting in
-advance: both products are built from ~30 m Landsat pixels, so a 1–4 ha plot
-contains only a dozen such pixels and mixed edges dominate — *disagreement
-should concentrate in exactly the smallholder plots that compliance is
-hardest for.* Let's see if the data agrees.
+same constant the verdict layer uses). The number that matters is the share of
+plots whose forest/non-forest **status flips between the two official maps** —
+because for those plots the EUDR-relevant baseline is a property of the *map
+choice*, not of the land. We also test how much moves when only Hansen's
+canopy-definition knob changes between 10% and 50%, to separate "the maps
+genuinely disagree" from "we picked a sensitive threshold".
 """),
     code("""
 THR = 0.30
@@ -183,62 +178,179 @@ b["def_disagree"] = (b.hansen_frac_c10 >= THR) != (b.hansen_frac_c50 >= THR)
 
 overall = b.maps_disagree.mean()
 by_def = b.def_disagree.mean()
-print(f"plots whose forest-at-cutoff status flips between JRC and Hansen: {overall:.1%}")
-print(f"plots whose status flips between canopy definitions 10% vs 50%:   {by_def:.1%}")
+
+# the 2x2 agreement matrix: where do the two authorities land?
+n_ff = int((b.jrc_forest & b.han_forest).sum())    # both call it forest
+n_fn = int((b.jrc_forest & ~b.han_forest).sum())   # JRC forest, Hansen not
+n_nf = int((~b.jrc_forest & b.han_forest).sum())   # Hansen forest, JRC not
+n_nn = int((~b.jrc_forest & ~b.han_forest).sum())  # both call it non-forest
+
+print(f"forest-at-cutoff status flips between JRC and Hansen: {overall:.1%} of plots")
+print(f"status flips when only the canopy definition moves (10% vs 50%): {by_def:.1%}")
+print(f"\\nagreement matrix ({len(b)} plots):")
+print(f"  both forest:      {n_ff:>4}      JRC forest / Hansen not: {n_fn:>4}")
+print(f"  Hansen forest / JRC not: {n_nf:>4}   both non-forest:    {n_nn:>4}")
+print(f"  -> agreement {(n_ff+n_nn)/len(b):.1%}, disagreement {(n_fn+n_nf)/len(b):.1%}")
 
 bins = [0, 4, 10, 30, 100, np.inf]
 labels = ["<=4 ha", "4-10 ha", "10-30 ha", "30-100 ha", ">100 ha"]
 b["size_bin"] = pd.cut(b.area_ha, bins=bins, labels=labels)
 by_size = b.groupby("size_bin", observed=True)["maps_disagree"].agg(["mean", "size"])
-print(by_size)
 
 cfg.append_result({"notebook": "02", "name": "baseline_disagreement",
-                   "threshold": THR,
-                   "map_disagreement_rate": float(overall),
+                   "threshold": THR, "map_disagreement_rate": float(overall),
                    "definition_disagreement_rate": float(by_def),
+                   "agreement_matrix": {"both_forest": n_ff, "jrc_only": n_fn,
+                                        "hansen_only": n_nf, "both_nonforest": n_nn},
                    "by_size": {str(k): float(v) for k, v in by_size["mean"].items()},
                    "assets": assets})
 """),
+    md("""
+The headline is large: **~42% of plots get a different forest-at-cutoff verdict
+depending on the map** — while only ~0.4% move when the canopy definition
+changes. So this is *not* a sensitive-threshold artefact; the two official maps
+genuinely disagree about this landscape. Notice too (below) that the
+disagreement is roughly **uniform across plot sizes**, not concentrated in tiny
+plots as one might guess — it is a pervasive product-level disagreement, not
+just a small-plot mixed-pixel effect. That is a stronger and more uncomfortable
+result for a compliance system than "small plots are noisy".
+"""),
     code("""
-fig, axes = plt.subplots(1, 2, figsize=(12, 4.8))
+import geopandas as gpd
 
+# rebuild a GeoDataFrame so geometry works (a plain merge drops the type)
+gb = plots[["plot_id", "geometry"]].merge(b, on="plot_id")
+
+# plot-centre coordinates for scatter, computed per-geometry to avoid geopandas'
+# "centroid in a geographic CRS" warning — at plot scale the planar centroid in
+# degrees is exact enough for a marker position, and this keeps output clean
+def centre_xy(geoms):
+    pts = [g.centroid for g in geoms]
+    return np.array([p.x for p in pts]), np.array([p.y for p in pts])
+
+cx_all, cy_all = centre_xy(gb.geometry)
+dis = gb.maps_disagree.to_numpy()
+
+fig, axes = plt.subplots(1, 3, figsize=(16, 4.8))
+
+# (1) the 2x2 agreement matrix as a heatmap
 ax = axes[0]
+M = np.array([[n_ff, n_fn], [n_nf, n_nn]])
+im = ax.imshow(M, cmap="YlOrRd")
+ax.set_xticks([0, 1], ["forest", "non-forest"]); ax.set_yticks([0, 1], ["forest", "non-forest"])
+ax.set_xlabel("Hansen"); ax.set_ylabel("JRC GFC2020")
+for (r, c), v in np.ndenumerate(M):
+    off = (r != c)
+    ax.text(c, r, f"{v}\\n{v/len(b):.0%}", ha="center", va="center", fontsize=11,
+            fontweight="bold" if off else "normal",
+            color="white" if v > M.max()*0.6 else "black")
+ax.set_title(f"Agreement matrix — off-diagonal = {overall:.0%} disagree")
+
+# (2) disagreement by plot size
+ax = axes[1]
 ax.bar(by_size.index.astype(str), by_size["mean"], color=viz.PALETTE["warn"])
 for x, (v, n) in enumerate(zip(by_size["mean"], by_size["size"])):
     ax.text(x, v, f"{v:.0%}\\n(n={n})", ha="center", va="bottom", fontsize=8)
-ax.set_ylabel("share of plots where the maps disagree")
-ax.set_title("Disagreement concentrates in small plots\\n(30 m source pixels vs plot size)")
+ax.set_ylabel("share where the maps disagree"); ax.set_ylim(0, 1)
+ax.set_title("Disagreement is pervasive across sizes")
+ax.tick_params(axis="x", labelsize=8)
 
-ax = axes[1]
-colors = np.where(b.maps_disagree, viz.PALETTE["warn"], viz.PALETTE["forest"])
-cent = b.merge(plots[["plot_id", "geometry"]], on="plot_id").geometry.centroid
-ax.scatter(cent.x, cent.y, c=colors, s=8, alpha=0.8)
-ax.set_title("Where the maps disagree (orange) over the AOI")
-ax.set_xlabel("longitude"); ax.set_ylabel("latitude")
-ax.set_aspect(1/np.cos(np.radians(-7.2)))
+# (3) where they disagree, over the real AOI basemap
+ax = axes[2]
+aoi_rgb, aoi_bbox, *_ = s2.basemap_rgb(cfg.AOI_BBOX, max_cloud=15, max_px=440)
+if aoi_rgb is not None:
+    ax.imshow(aoi_rgb, extent=[cfg.AOI_BBOX[0], cfg.AOI_BBOX[2], cfg.AOI_BBOX[1], cfg.AOI_BBOX[3]],
+              origin="upper")
+ax.scatter(cx_all[~dis], cy_all[~dis], s=7,
+           c=viz.PALETTE["forest"], alpha=0.7, label="agree")
+ax.scatter(cx_all[dis], cy_all[dis], s=14,
+           c=viz.PALETTE["warn"], alpha=0.9, label="disagree", edgecolor="k", linewidth=0.2)
+ax.set_title("Disagreeing plots (orange) on real Sentinel-2")
+ax.set_xticks([]); ax.set_yticks([]); ax.grid(False); ax.legend(fontsize=8, loc="upper right")
 fig.tight_layout()
 viz.save(fig, "g02_disagreement")
+plt.show()
+""".replace("import geopandas as gpd\n", "from geoverdict import s2\nimport geopandas as gpd\n")),
+    md("""
+### Seeing the baseline: forest fraction on real imagery
+
+The two maps as the pipeline sees them — every plot coloured by its forest
+fraction (green = forest, brown = cleared/non-forest) over the real Sentinel-2
+scene. Reading the two panels side by side, you can *see* JRC calling more of
+this frontier "forest" than Hansen does, which is exactly the source of the
+disagreement.
+"""),
+    code("""
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
+cmap = plt.get_cmap("RdYlGn")
+norm = Normalize(0, 1)
+
+for ax, col, name in ((axes[0], "forest_frac_jrc", "JRC GFC2020"),
+                      (axes[1], "forest_frac_hansen", "Hansen (30% canopy)")):
+    if aoi_rgb is not None:
+        ax.imshow(aoi_rgb, extent=[cfg.AOI_BBOX[0], cfg.AOI_BBOX[2], cfg.AOI_BBOX[1], cfg.AOI_BBOX[3]],
+                  origin="upper", alpha=0.85)
+    ax.scatter(cx_all, cy_all, c=cmap(norm(gb[col])), s=22, edgecolor="k", linewidth=0.3)
+    ax.set_title(f"{name} — mean forest fraction {gb[col].mean():.0%}")
+    ax.set_xticks([]); ax.set_yticks([]); ax.grid(False)
+fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=axes, fraction=0.025,
+             label="forest fraction at 2020 cutoff (green = forest)")
+viz.save(fig, "g02_fraction_maps")
+plt.show()
+"""),
+    md("""
+### What a disagreement actually looks like
+
+Abstract percentages are easy to wave away, so here are concrete cases: plots
+where **JRC says forest and Hansen says not** (or vice versa), each on its own
+Sentinel-2 chip. These are almost always **fragmented forest edges, regrowth,
+or agroforestry mosaics** — genuinely ambiguous land where two reasonable
+mapping methods land on opposite sides of the 30% line. This is the land where
+a compliance verdict is hardest, and where GeoVerdict refuses to hide the
+conflict.
+"""),
+    code("""
+disagreers = gb[gb.maps_disagree].copy()
+disagreers["gap"] = (disagreers.forest_frac_jrc - disagreers.forest_frac_hansen).abs()
+show = disagreers.sort_values("gap", ascending=False).head(6)
+
+fig, axes = plt.subplots(2, 3, figsize=(14, 9.2))
+for ax, (_, row) in zip(axes.ravel(), show.iterrows()):
+    g = row.geometry
+    rgb, bbox, *_ = s2.basemap_rgb(s2.geom_view_bbox(g, margin_frac=0.6), max_cloud=25, max_px=256)
+    viz.plot_on_basemap(ax, rgb, bbox, [(g, dict(edgecolor=viz.PALETTE["warn"], lw=2.0))],
+        title=f"plot {row.plot_id}: JRC {row.forest_frac_jrc:.0%} vs Hansen {row.forest_frac_hansen:.0%}")
+fig.suptitle("Plots where the two official maps disagree, on real Sentinel-2",
+             fontweight="bold", y=1.0)
+fig.tight_layout()
+viz.save(fig, "g02_disagreement_gallery")
 plt.show()
 """),
     md("""
 ### Why this matters (and what a production system does about it)
 
-If X% of plots get a different compliance-relevant baseline depending on
-which official map is consulted, then for those plots **the verdict is a
-property of the map choice, not of the land** — and a system that silently
-picks one map is hiding a judgement call inside a lookup. GeoVerdict's
-response, implemented in chapter 05: baseline disagreement is *itself a
-signal* that caps the verdict at MEDIUM and states the conflict in the
-evidence bundle, so a human sees exactly which authority said what.
+**~42% of plots** get a different compliance-relevant baseline depending on
+which official map is consulted. For those plots the verdict is a property of
+the *map choice*, not of the land — and a system that silently picks one map is
+hiding a judgement call inside a lookup. GeoVerdict's response, implemented in
+chapter 05: baseline disagreement is *itself a signal* that caps the verdict at
+**MEDIUM** and states the conflict in the evidence bundle, so a human sees
+exactly which authority said what and why.
 
-Also worth naming: our plots are *randomly placed* over a deforestation
-frontier — a portfolio of real farms clusters along roads and rivers, on
-exactly the fragmented forest edges where maps disagree most. This estimate
-is therefore more likely a floor than a ceiling for real submissions.
+Two honest caveats on the number:
+- Our plots are *randomly placed* over a deforestation frontier; real farm
+  portfolios cluster on roads and rivers — the fragmented edges where maps
+  disagree most — so this is more likely a **floor** than a ceiling.
+- The disagreement is a property of *this biome and frontier*; a different
+  region (dense intact forest, or open cropland) would show far less. That
+  regional dependence is itself the kind of thing this pipeline is built to
+  measure rather than assume.
 
-**Next:** chapter 03 stops asking maps and starts asking the satellite —
-six years of Sentinel-2 over every plot, and a detector that finds the month
-the forest signal broke.
+**Next:** chapter 03 stops asking maps and starts asking the satellite — six
+years of Sentinel-2 over every plot, and a detector that finds the month the
+forest signal broke.
 """),
 ]
 
