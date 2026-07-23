@@ -246,6 +246,43 @@ viz.save(fig, "g03_series_gallery")
 plt.show()
 """),
     md("""
+### Validating a breakpoint against the ground
+
+Numbers are one thing; the actual land is another. For a few plots the detector
+flagged, here is the plot on real Sentinel-2 at the **cutoff epoch (2020)** and
+**recently (2024)**. If the method works, these should show forest in 2020 and
+bare/cleared ground in 2024 — the breakpoint the time series found, visible from
+space. (Composited dry-season basemaps, same STAC path as chapter 04.)
+"""),
+    code("""
+from geoverdict import s2
+
+det_l = detections.set_index("plot_id")
+sub_g = sub.set_index("plot_id")
+clear_ids = [pid for pid in detections[detections.break_detected].plot_id
+             if sub_g.loc[pid, "hansen_loss_post_frac"] > 0.3][:3]
+
+fig, axes = plt.subplots(len(clear_ids), 2, figsize=(8.5, 4.2 * len(clear_ids)))
+axes = np.atleast_2d(axes)
+for row, pid in enumerate(clear_ids):
+    g = sub_g.loc[pid, "geometry"]
+    bbox = s2.geom_view_bbox(g, margin_frac=0.5)
+    rgb1, bb, *_ = s2.basemap_rgb(bbox, date_range="2020-05-01/2020-09-30", max_cloud=35)
+    rgb2, bb, *_ = s2.basemap_rgb(bbox, date_range="2024-05-01/2024-09-30", max_cloud=35)
+    bd = det_l.loc[pid, "break_date"]
+    viz.plot_on_basemap(axes[row, 0], rgb1, bbox,
+                        [(g, dict(edgecolor=viz.PALETTE["forest"], lw=2.2))],
+                        title=f"plot {pid} — 2020 (cutoff epoch)")
+    viz.plot_on_basemap(axes[row, 1], rgb2, bbox,
+                        [(g, dict(edgecolor=viz.PALETTE["clearing"], lw=2.2))],
+                        title=f"break detected {bd} — 2024")
+fig.suptitle("Detector breakpoints are real clearings: forest in 2020, cleared by 2024",
+             fontweight="bold", y=1.0)
+fig.tight_layout()
+viz.save(fig, "g03_clearing_imagery")
+plt.show()
+"""),
+    md("""
 ### Evaluation against the independent reference
 
 **The reference label:** Hansen post-2020 loss fraction > 20% = "cleared".
@@ -394,6 +431,47 @@ cfg.append_result({"notebook": "03", "name": "rf_vs_detector",
                    "rf_pr_auc": M.pr_auc(y[test_mask], rf_scores),
                    "detector_pr_auc": M.pr_auc(y[test_mask], stats_scores_test),
                    "n_test": int(test_mask.sum())})
+"""),
+    md("""
+### The picture: how much does the method matter?
+
+Left — the precision/recall curves make the headline visible: on the *same*
+temporal features and the *same* spatially-blocked test plots, the random forest
+dominates the hand-tuned detector across the whole curve. That is the chapter's
+core result: the signal is in the data; fixed thresholds just fail to extract it.
+
+Right — the screening cost. As you push the graded score to catch more clearings
+(higher recall), you flag ever more plots for human review and miss ever fewer.
+This is the curve a compliance lead actually budgets against, and it is sobering:
+plot-mean screening alone is a blunt instrument here — which is the case for the
+pixel model next door.
+"""),
+    code("""
+from sklearn.metrics import precision_recall_curve
+
+fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+curves = {}
+for name, sc in (("hand-tuned detector", stats_scores_test), ("random forest", rf_scores)):
+    p, r, _ = precision_recall_curve(y[test_mask], sc)
+    curves[name] = (p, r, M.pr_auc(y[test_mask], sc))
+viz.plot_pr_curves(axes[0], curves)
+axes[0].set_title("Learning beats hand-thresholding\\n(same features, spatially-blocked test)")
+
+st = pd.DataFrame(M.screening_table(y_true, scores))
+x = np.arange(len(st)); w = 0.36
+axes[1].bar(x - w/2, st.flags_per_1000, w, color=viz.PALETTE["warn"], label="plots flagged / 1,000")
+axes[1].bar(x + w/2, st.missed_clearings_per_1000, w, color=viz.PALETTE["clearing"],
+            label="clearings missed / 1,000")
+for xi, (fl, ms) in enumerate(zip(st.flags_per_1000, st.missed_clearings_per_1000)):
+    axes[1].text(xi - w/2, fl, f"{fl:.0f}", ha="center", va="bottom", fontsize=8)
+    axes[1].text(xi + w/2, ms, f"{ms:.0f}", ha="center", va="bottom", fontsize=8)
+axes[1].set_xticks(x, [f"{int(t*100)}%\\nrecall" for t in st.recall_target])
+axes[1].set_ylabel("per 1,000 plots screened"); axes[1].legend(fontsize=8)
+axes[1].set_title("The screening cost of catching more clearings")
+fig.tight_layout()
+viz.save(fig, "g03_pr_and_cost")
+plt.show()
 """),
     md("""
 ### What this chapter established
