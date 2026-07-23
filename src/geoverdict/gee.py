@@ -31,7 +31,10 @@ HANSEN_CANDIDATES = [
     "UMD/hansen/global_forest_change_2024_v1_12",
     "UMD/hansen/global_forest_change_2023_v1_11",
 ]
+# JRC GFC2020 is served as an ImageCollection of tiles (NOT a single Image),
+# so it must be mosaicked before use. V1/V2 are deprecated; V3 is current.
 JRC_GFC2020_CANDIDATES = [
+    "JRC/GFC2020/V3",
     "JRC/GFC2020/V2",
     "JRC/GFC2020/V1",
 ]
@@ -59,13 +62,32 @@ def init(project: str | None = None) -> None:
 
 
 def _first_available(candidates: list[str], kind: str):
+    """Return the first loadable asset + its id, trying candidates in order.
+
+    kind:
+      "image"      -> ee.Image (e.g. Hansen GFC, a single global image)
+      "collection" -> ee.ImageCollection (e.g. TMF annual changes)
+      "mosaic"     -> ee.ImageCollection mosaicked into one Image (e.g. JRC
+                      GFC2020, which is served as tiles and must be composited)
+
+    Each candidate is probed with a light server round-trip (bandNames /
+    size), so an unavailable or wrong-type asset fails HERE and we fall
+    through to the next version instead of exploding deep in a reducer.
+    """
     import ee
 
     errors = []
     for asset_id in candidates:
         try:
-            obj = ee.ImageCollection(asset_id) if kind == "collection" else ee.Image(asset_id)
-            obj.getInfo()  # forces a server round-trip so failure happens HERE
+            if kind == "collection":
+                obj = ee.ImageCollection(asset_id)
+                obj.size().getInfo()
+            elif kind == "mosaic":
+                obj = ee.ImageCollection(asset_id).mosaic()
+                obj.bandNames().getInfo()
+            else:
+                obj = ee.Image(asset_id)
+                obj.bandNames().getInfo()
             return obj, asset_id
         except Exception as e:  # try the next version, remember why
             errors.append(f"{asset_id}: {e}")
@@ -97,10 +119,15 @@ def forest_baseline_fractions(geoms, ids, batch: int = 120,
     """
     import ee
 
-    jrc_img, jrc_id = _first_available(JRC_GFC2020_CANDIDATES, "image")
+    jrc_img, jrc_id = _first_available(JRC_GFC2020_CANDIDATES, "mosaic")
     hansen_img, hansen_id = _first_available(HANSEN_CANDIDATES, "image")
 
-    jrc_forest = jrc_img.select("Map").eq(1)
+    # GFC2020's forest band is "Map" (1 = tree cover); fall back to band 0 if a
+    # future version renames it, so a rename degrades gracefully rather than
+    # crashing.
+    jrc_bands = jrc_img.bandNames().getInfo()
+    jrc_sel = "Map" if "Map" in jrc_bands else jrc_bands[0]
+    jrc_forest = jrc_img.select(jrc_sel).eq(1)
     treecover = hansen_img.select("treecover2000").gte(canopy_threshold)
     lossyear = hansen_img.select("lossyear")  # 0 = no loss; 1..24 = 2001..2024
     lost_by_cutoff = lossyear.gt(0).And(lossyear.lte(cfg.CUTOFF_YEAR - 2000))
