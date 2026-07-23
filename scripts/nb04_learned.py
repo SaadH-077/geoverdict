@@ -313,6 +313,66 @@ cfg.append_result({"notebook": "04", "name": "cnn_eval",
                    "n_test": int(len(y_test)), "seeds": list(cfg.SEEDS)})
 """),
     md("""
+### Does 0.5 separate cleared from stable? The probability distribution
+
+Before trusting any threshold, look at how the calibrated probabilities fall for
+the two true classes on the held-out test set. A model that works pushes cleared
+plots toward 1 and stable plots toward 0 with a visible valley between; heavy
+overlap in the middle is where the false positives and false negatives live —
+and it is exactly the *partial-clearing* regime chapter 03 flagged.
+"""),
+    code("""
+fig, ax = plt.subplots(figsize=(7.5, 4.2))
+bins = np.linspace(0, 1, 26)
+ax.hist(cnn_probs[y_test == 0], bins=bins, alpha=0.65, color=viz.PALETTE["forest"],
+        label=f"stable (n={(y_test==0).sum()})")
+ax.hist(cnn_probs[y_test == 1], bins=bins, alpha=0.65, color=viz.PALETTE["clearing"],
+        label=f"cleared (n={(y_test==1).sum()})")
+ax.axvline(0.5, color=viz.PALETTE["neutral"], ls="--", lw=1)
+ax.set_xlabel("CNN clearing probability"); ax.set_ylabel("plots")
+ax.set_title("Class separation on the held-out test set"); ax.legend()
+viz.save(fig, "g04_prob_separation")
+plt.show()
+"""),
+    md("""
+### Reading the model's mind: right, wrong, and missed
+
+The most honest way to judge a detector is to look at what it gets wrong. Below,
+on real before/after chips: confident correct calls, **false positives** (model
+says cleared, Hansen says not — often regrowth, selective logging, or seasonal
+bare soil) and **false negatives** (model missed a real clearing — usually
+partial or cloud-starved). The false cases are the ones worth staring at; each
+tells you something the aggregate numbers cannot.
+"""),
+    code("""
+def gallery_rows(pred, true, probs, n=2):
+    order = np.argsort(-np.abs(probs - 0.5))  # most confident first
+    tp = [i for i in order if true[i] == 1 and pred[i] == 1][:n]
+    fp = [i for i in order if true[i] == 0 and pred[i] == 1][:n]
+    fn = [i for i in order if true[i] == 1 and pred[i] == 0][:n]
+    return [("correct: cleared", tp), ("false positive", fp), ("missed clearing", fn)]
+
+pred_test = (cnn_probs >= 0.5).astype(int)
+groups = gallery_rows(pred_test, y_test, cnn_probs)
+test_idx = idx["test"]
+rows_to_show = [(lbl, test_idx[i]) for lbl, ii in groups for i in ii]
+
+if rows_to_show:
+    fig, axes = plt.subplots(len(rows_to_show), 2, figsize=(7.5, 3.6 * len(rows_to_show)))
+    axes = np.atleast_2d(axes)
+    for r, (lbl, gi) in enumerate(rows_to_show):
+        p = cnn_probs[list(test_idx).index(gi)]
+        viz.before_after_panel((axes[r, 0], axes[r, 1]), X1[gi], X2[gi],
+                               f"{lbl}  ·  T1 (2020)", f"p(cleared)={p:.2f}  ·  T2 (2024)")
+    fig.suptitle("CNN diagnosis gallery — correct calls, false alarms, and misses",
+                 fontweight="bold", y=1.0)
+    fig.tight_layout()
+    viz.save(fig, "g04_diagnosis_gallery")
+    plt.show()
+else:
+    print("no test-set examples to show")
+"""),
+    md("""
 ### The headline experiment: what do hard negatives buy?
 
 Retrain (one seed — the deltas here dwarf seed noise, and the multi-seed
@@ -408,6 +468,35 @@ pd.DataFrame({"plot_id": meta.sample_id.to_numpy()[plot_rows],
               "t1_item": "see chips.npz provenance",
               }).to_csv(cfg.OUTPUT_DIR / "cnn_predictions.csv", index=False)
 print(f"calibrated probabilities saved for {len(plot_rows)} plots")
+"""),
+    md("""
+### The whole portfolio, as the CNN sees it
+
+Every analysable plot coloured by its calibrated clearing probability over the
+real Sentinel-2 frontier — red where the model is confident of post-2020
+clearing, green where it reads intact. This is the spatial output chapter 05
+turns into verdicts, and it should visibly light up the cleared "fishbone"
+zones while leaving the intact-forest blocks green.
+"""),
+    code("""
+from geoverdict import s2
+
+pred_plots = plots.set_index("plot_id").loc[meta.sample_id.to_numpy()[plot_rows]]
+cxp = np.array([g.centroid.x for g in pred_plots.geometry])
+cyp = np.array([g.centroid.y for g in pred_plots.geometry])
+
+fig, ax = plt.subplots(figsize=(9, 9))
+aoi_rgb, aoi_bbox, *_ = s2.basemap_rgb(cfg.AOI_BBOX, max_cloud=15, max_px=460)
+if aoi_rgb is not None:
+    ax.imshow(aoi_rgb, extent=[cfg.AOI_BBOX[0], cfg.AOI_BBOX[2], cfg.AOI_BBOX[1], cfg.AOI_BBOX[3]],
+              origin="upper", alpha=0.85)
+sc = ax.scatter(cxp, cyp, c=probs_all, cmap="RdYlGn_r", vmin=0, vmax=1,
+                s=34, edgecolor="k", linewidth=0.3)
+fig.colorbar(sc, ax=ax, fraction=0.04, label="calibrated P(cleared since 2020)")
+ax.set_title("CNN clearing probability across the portfolio, on real Sentinel-2")
+ax.set_xticks([]); ax.set_yticks([]); ax.grid(False)
+viz.save(fig, "g04_probability_map")
+plt.show()
 """),
     md("""
 ### What this chapter established
