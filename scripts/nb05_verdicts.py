@@ -120,6 +120,65 @@ viz.save(fig, "g05_verdict_map")
 plt.show()
 """),
     md("""
+### How every verdict is reached — the decision cascade
+
+The verdict is not a black box: each plot falls through a fixed sequence of
+gates, and this diagram shows exactly where the portfolio splits off, with live
+counts. Read top to bottom — geometry, then forest-at-cutoff, then *was it even
+screened*, then the detector fusion. A plot exits to a tier the moment a gate
+decides it; nothing reaches "clean LOW" without passing every check.
+"""),
+    code("""
+from matplotlib.patches import FancyBboxPatch
+
+R = [" ".join(v.reasons) for v in verdicts]
+T = [v.tier for v in verdicts]
+def cnt(pred): return sum(1 for r, t in zip(R, T) if pred(r, t))
+geom_fail  = cnt(lambda r, t: "geometry could not" in r)
+nonforest  = cnt(lambda r, t: "non-forest at the EUDR cutoff" in r)
+unscreened = cnt(lambda r, t: "not screened for post-cutoff" in r)
+high_n     = sum(1 for t in T if t == "HIGH")
+medium_n   = sum(1 for t in T if t == "MEDIUM")
+low_clean  = cnt(lambda r, t: "monitored throughout" in r)
+
+fig, ax = plt.subplots(figsize=(11.5, 8)); ax.axis("off")
+ax.set_xlim(0, 10); ax.set_ylim(0, 12)
+def box(x, y, txt, color="#e9ecef", tc="black", w=3.1, h=0.95):
+    ax.add_patch(FancyBboxPatch((x - w/2, y - h/2), w, h, boxstyle="round,pad=0.04",
+                                fc=color, ec="#495057", lw=1.1))
+    ax.text(x, y, txt, ha="center", va="center", fontsize=8.8, color=tc)
+def arrow(x1, y1, x2, y2, txt="", dx=0.12):
+    ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
+                arrowprops=dict(arrowstyle="-|>", color="#495057", lw=1.3))
+    if txt: ax.text((x1 + x2)/2 + dx, (y1 + y2)/2 + 0.1, txt, fontsize=7.5, color="#868e96")
+
+box(3, 11.2, f"{len(verdicts)} plots enter", color="#ced4da")
+box(3, 9.4, "geometry valid AND\\nforest at cutoff?")
+arrow(3, 10.7, 3, 9.9)
+box(7.7, 9.4, f"exit early:  non-forest -> LOW ({nonforest})\\ngeometry -> INSUFFICIENT ({geom_fail})",
+    color=viz.PALETTE["insufficient"], tc="white", w=4.3)
+arrow(4.55, 9.4, 5.55, 9.4, "no")
+box(3, 7.5, "time-series screened?")
+arrow(3, 8.9, 3, 8.0, "yes")
+box(7.7, 7.5, f"INSUFFICIENT - abstain,\\nnot checked ({unscreened})",
+    color=viz.TIER_COLORS["INSUFFICIENT_EVIDENCE"], tc="white", w=4.3)
+arrow(4.55, 7.5, 5.55, 7.5, "no")
+box(3, 5.6, "clearing signal?")
+arrow(3, 7.0, 3, 6.1, "yes")
+box(7.7, 6.15, f"HIGH - corroborated ({high_n})",
+    color=viz.TIER_COLORS["HIGH"], tc="white", w=4.3, h=0.75)
+arrow(4.55, 5.85, 5.55, 6.15, "break + model")
+box(7.7, 5.05, f"MEDIUM - conflicting evidence ({medium_n})",
+    color=viz.TIER_COLORS["MEDIUM"], w=4.3, h=0.75)
+arrow(4.55, 5.35, 5.55, 5.05, "conflict")
+box(3, 3.6, f"LOW - clean, fully monitored ({low_clean})",
+    color=viz.TIER_COLORS["LOW"], tc="white", w=3.6)
+arrow(3, 5.1, 3, 4.1, "none")
+ax.set_title("The verdict decision cascade, with live counts", fontweight="bold", y=0.99)
+viz.save(fig, "g05_decision_flow")
+plt.show()
+"""),
+    md("""
 ### Why did each plot get its tier? Reasons are data, not prose
 
 Every verdict carries machine-readable reasons. Aggregating them turns the
@@ -131,13 +190,16 @@ lead would actually triage from.
 """),
     code("""
 def reason_category(reason: str) -> str:
+    if "not screened for post-cutoff" in reason: return "not screened (abstain)"
+    if "sustained spectral breakpoint" in reason: return "corroborated clearing"
+    if "learned detector flags" in reason: return "model flag, no break"
+    if "breakpoint" in reason and "disagrees" in reason: return "detectors disagree"
+    if "Hansen maps" in reason: return "reference-only loss"
     if "baselines disagree" in reason: return "baseline maps disagree"
-    if "detector disagrees" in reason or "without a confirmed" in reason: return "detectors disagree"
     if "monitoring months" in reason or "record is thin" in reason: return "thin observation record"
-    if "breakpoint" in reason and "concurs" in reason: return "corroborated clearing"
     if "non-forest at the EUDR cutoff" in reason: return "not forest at cutoff"
     if "geometry" in reason: return "geometry caveat"
-    if "no detector" in reason: return "clean monitored forest"
+    if "monitored throughout" in reason: return "clean monitored forest"
     return "other"
 
 cats = []
@@ -214,12 +276,14 @@ prov = [json.loads((cfg.OUTPUT_DIR / "baseline_provenance.json").read_text()),
          "created": "", "parameters": {"chip_bands": list(cfg.CHIP_BANDS)}}]
 
 by_id = {v.plot_id: v for v in verdicts}
-screened = [pid for pid in detections.plot_id if pid in by_id]
+screened = set(detections.plot_id) & set(by_id)
 
+# search ALL verdicts for the showcase — INSUFFICIENT plots are unscreened by
+# definition, so searching only screened plots would never surface one
 def first_where(pred):
-    for pid in screened:
-        if pred(by_id[pid]):
-            return pid
+    for v in verdicts:
+        if pred(v):
+            return v.plot_id
     return None
 
 showcase = {
@@ -229,13 +293,19 @@ showcase = {
 }
 print("showcase plots:", showcase)
 
+# build a bundle for every screened plot AND every plot needing attention (so
+# the abstained INSUFFICIENT plots get an evidence record too — their missing
+# time-series is shown honestly as absent, which is the whole point)
+bundle_ids = sorted(screened | {v.plot_id for v in verdicts if v.tier != "LOW"},
+                    key=lambda s: int(s))
+plots_ix = plots.set_index("plot_id")
 n_saved = 0
-for pid in screened:
+for pid in bundle_ids:
     v = by_id[pid]
     ndvi_s = monthly_df[(pid, "ndvi")] if (pid, "ndvi") in monthly_df.columns else None
     nbr_s = monthly_df[(pid, "nbr")] if (pid, "nbr") in monthly_df.columns else None
     br = ts.detect_break(nbr_s, cfg.CUTOFF_DATE).to_dict() if nbr_s is not None else None
-    prow = plots.set_index("plot_id").loc[pid]
+    prow = plots_ix.loc[pid]
     bundle = evidence.build_bundle(
         v, {"plot_id": pid, "area_ha": float(prow.area_ha),
             "centroid": [float(prow.geometry.centroid.x), float(prow.geometry.centroid.y)],
@@ -244,7 +314,8 @@ for pid in screened:
         ndvi_series=ndvi_s, nbr_series=nbr_s, break_result=br, provenance=prov)
     evidence.save_bundle(bundle)
     n_saved += 1
-print(f"saved {n_saved} evidence bundles -> {cfg.EVIDENCE_DIR}")
+print(f"saved {n_saved} evidence bundles ({len(screened)} screened + attention-required) "
+      f"-> {cfg.EVIDENCE_DIR}")
 """),
     code("""
 # chips for the showcase figures come from the chapter-04 cache
@@ -263,26 +334,45 @@ for name, pid in showcase.items():
     plt.show()
 """),
     md("""
-### The portfolio roll-up: what feeds a Due Diligence Statement
+### The portfolio roll-up: a formatted Due-Diligence screening report
 
 Under EUDR, the operator files a DDS asserting negligible risk *for the
-portfolio*, backed by per-plot geolocation and evidence. The roll-up below is
-the shape of that support: tier counts, and every non-LOW plot listed by id
-with its reasons — because those are exactly the plots a human must resolve
-before the statement is signed. (This is deliberately *support for* a DDS,
-not a DDS: the legal document has registry fields — operator identity, HS
-codes, quantities — that are out of scope for a screening prototype, and
-pretending otherwise would be the kind of overclaim this project avoids.)
+portfolio*, backed by per-plot geolocation and evidence. Below is the shape of
+that support, rendered as a clean report a compliance officer would actually
+read — a risk overview, the analyst-workload translation, and a ranked table of
+the parcels that need a human, each with its leading reason. It is saved to
+`outputs/dds_report.md` and the machine-readable roll-up to `dds_summary.json`.
+
+(This is deliberately *support for* a DDS, not a DDS itself: the legal document
+carries registry fields — operator identity, HS codes, quantities — out of scope
+for a screening prototype, and pretending otherwise would be the kind of
+overclaim this project avoids.)
 """),
     code("""
+from IPython.display import Markdown, display
+
+# machine-readable roll-up (every non-LOW plot with full reasons)
 summary = evidence.portfolio_summary(verdicts, cfg.OUTPUT_DIR / "dds_summary.json")
-print(json.dumps({k: v for k, v in summary.items() if k != "attention_required"}, indent=2))
-print(f"\\nplots requiring attention: {len(summary['attention_required'])} "
-      f"(first 3 shown)")
-for item in summary["attention_required"][:3]:
-    print(f"\\n  plot {item['plot_id']} [{item['tier']}]")
-    for reason in item["reasons"]:
-        print(f"    - {reason}")
+
+# human-readable formatted report
+areas = dict(zip(plots.plot_id, plots.area_ha))
+report_md = evidence.format_dds_report(verdicts, areas)
+(cfg.OUTPUT_DIR / "dds_report.md").write_text(report_md, encoding="utf-8")
+display(Markdown(report_md))
+"""),
+    code("""
+# the attention list as a sortable table (renders cleanly in the notebook)
+att = pd.DataFrame([
+    {"plot": v.plot_id, "tier": v.tier.replace("_EVIDENCE", ""),
+     "area_ha": round(areas.get(v.plot_id, float("nan")), 1),
+     "leading_reason": (v.reasons[0].split(" — ")[0] if v.reasons else "")}
+    for v in verdicts if v.tier != "LOW"
+])
+att["_rank"] = att.tier.map({"HIGH": 0, "MEDIUM": 1, "INSUFFICIENT": 2}).fillna(3)
+att = (att.sort_values(["_rank", "area_ha"], ascending=[True, False])
+          .drop(columns="_rank").reset_index(drop=True))
+print(f"{len(att)} parcels require attention (top 15 shown):")
+att.head(15)
 """),
     md("""
 ### What this chapter established

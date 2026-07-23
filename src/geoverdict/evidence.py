@@ -104,3 +104,81 @@ def portfolio_summary(verdicts: list, path: Path | str | None = None) -> dict:
     if path is not None:
         Path(path).write_text(json.dumps(summary, indent=2, default=cfg._json_default), encoding="utf-8")
     return summary
+
+
+# Tier presentation: icon + one-line meaning, ordered for a risk report.
+_TIER_META = [
+    ("HIGH", "🟥", "corroborated post-2020 clearing on land that was forest at the cutoff"),
+    ("MEDIUM", "⚠️", "conflicting or partial evidence — human review required"),
+    ("INSUFFICIENT_EVIDENCE", "◻️", "not screened or unobservable — the pipeline abstains"),
+    ("LOW", "✅", "negligible risk — no post-cutoff clearing found"),
+]
+
+
+def format_dds_report(verdicts: list, areas: dict | None = None, review_min: int = 15,
+                      max_rows: int = 25) -> str:
+    """A clean, human-readable EUDR screening summary in Markdown.
+
+    This is the portfolio-level *support for* a Due Diligence Statement — the
+    document a compliance officer reads before signing. It is deliberately not a
+    raw JSON dump: a risk overview table, the analyst-workload translation, and a
+    ranked table of the plots that actually need a human, each with its single
+    most important reason. Full per-plot evidence lives in the JSON bundles.
+    """
+    n = max(len(verdicts), 1)
+    counts = {}
+    for v in verdicts:
+        counts[v.tier] = counts.get(v.tier, 0) + 1
+    total_ha = sum(areas.values()) if areas else None
+
+    L = [
+        "# EUDR Due Diligence — Screening Summary",
+        "",
+        "**Framework:** EUDR (Regulation (EU) 2023/1115)  ·  **Deforestation cut-off:** 31 December 2020  ",
+        f"**Generated:** {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC}  ",
+        f"**Portfolio:** {len(verdicts)} land parcels"
+        + (f"  ·  {total_ha:,.0f} ha total" if total_ha is not None else ""),
+        "",
+        "## Risk overview",
+        "",
+        "| | Tier | Parcels | Share | Assessment |",
+        "|:--:|:--|--:|--:|:--|",
+    ]
+    for tier, icon, meaning in _TIER_META:
+        c = counts.get(tier, 0)
+        L.append(f"| {icon} | **{tier.replace('_EVIDENCE','')}** | {c} | {c/n:.0%} | {meaning} |")
+
+    need = sum(counts.get(t, 0) for t in ("HIGH", "MEDIUM", "INSUFFICIENT_EVIDENCE"))
+    hours_per_1000 = need / n * 1000 * review_min / 60
+    L += [
+        "",
+        f"> **Cleared automatically (LOW):** {counts.get('LOW', 0)} parcels "
+        f"({counts.get('LOW', 0)/n:.0%}).  "
+        f"**Require human review:** {need} parcels ({need/n:.0%}) — "
+        f"≈ {hours_per_1000:.0f} analyst-hours per 1,000 parcels at {review_min} min each.",
+        "",
+        "## Parcels requiring attention",
+        "",
+        "| Parcel | Tier | Area (ha) | Leading reason |",
+        "|:--|:--|--:|:--|",
+    ]
+    rank = {"HIGH": 0, "MEDIUM": 1, "INSUFFICIENT_EVIDENCE": 2}
+    attention = sorted((v for v in verdicts if v.tier != "LOW"),
+                       key=lambda v: rank.get(v.tier, 3))
+    for v in attention[:max_rows]:
+        area = f"{areas.get(v.plot_id, float('nan')):.1f}" if areas else "—"
+        reason = (v.reasons[0] if v.reasons else "").split(" — ")[0].split(" (")[0]
+        L.append(f"| {v.plot_id} | {v.tier.replace('_EVIDENCE','')} | {area} | {reason[:80]} |")
+    if len(attention) > max_rows:
+        L.append(f"| … | | | *and {len(attention) - max_rows} more — full list in `dds_summary.json`* |")
+
+    L += [
+        "",
+        "---",
+        "",
+        "*Screening evidence only — not a legal determination. Every HIGH / MEDIUM / "
+        "INSUFFICIENT parcel above must be resolved by a human before a Due Diligence "
+        "Statement is signed. Full per-parcel evidence bundles (imagery, spectral time "
+        "series, provenance) are in `outputs/evidence/`.*",
+    ]
+    return "\n".join(L)
