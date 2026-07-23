@@ -134,9 +134,15 @@ def forest_baseline_fractions(geoms, ids, batch: int = 120,
     hansen_forest_2020 = treecover.And(lost_by_cutoff.Not())
     loss_post = lossyear.gt(cfg.CUTOFF_YEAR - 2000)
 
-    stack = (jrc_forest.rename("jrc")
-             .addBands(hansen_forest_2020.rename("hansen"))
-             .addBands(loss_post.rename("loss_post")))
+    # CRITICAL: unmask to 0 before the mean reducer. GFC2020's "Map" band masks
+    # non-forest pixels, and ee.Reducer.mean() IGNORES masked pixels — so
+    # without this the forest fraction would be ~1.0 for any plot containing any
+    # forest at all, silently breaking the whole map-disagreement analysis.
+    # unmask(0) makes masked pixels count as non-forest / no-loss, so the mean
+    # is a true "fraction of the plot" over every pixel.
+    stack = (jrc_forest.unmask(0).rename("jrc")
+             .addBands(hansen_forest_2020.unmask(0).rename("hansen"))
+             .addBands(loss_post.unmask(0).rename("loss_post")))
 
     rows = []
     for s in range(0, len(geoms), batch):
