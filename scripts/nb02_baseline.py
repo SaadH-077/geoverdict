@@ -206,14 +206,28 @@ cfg.append_result({"notebook": "02", "name": "baseline_disagreement",
                    "assets": assets})
 """),
     md("""
-The headline is large: **~42% of plots get a different forest-at-cutoff verdict
-depending on the map** — while only ~0.4% move when the canopy definition
-changes. So this is *not* a sensitive-threshold artefact; the two official maps
-genuinely disagree about this landscape. Notice too (below) that the
-disagreement is roughly **uniform across plot sizes**, not concentrated in tiny
-plots as one might guess — it is a pervasive product-level disagreement, not
-just a small-plot mixed-pixel effect. That is a stronger and more uncomfortable
-result for a compliance system than "small plots are noisy".
+The headline is large: **nearly 40% of plots get a different forest-at-cutoff
+verdict depending on the map**, while only ~0.4% move when the canopy definition
+changes — so this is *not* a sensitive-threshold artefact; the two official maps
+genuinely disagree about this landscape.
+
+**And the disagreement is strongly one-sided**, which is the real insight. Almost
+all of it is *JRC says forest, Hansen says not* (≈187 plots) rather than the
+reverse (≈8). JRC calls ~43% of this frontier forest; Hansen only ~12%. That gap
+is not noise — it is **methodology**: Hansen's 2020 forest is defined as
+*"≥30% canopy in the year 2000, minus mapped loss since"*, so it is anchored to
+the 2000 primary-forest baseline and **structurally cannot see post-2000
+regrowth or secondary forest**. JRC classifies the 2020 state directly, so it
+*does* count that regrowth. The disagreement gallery below makes this concrete:
+the worst-disagreement plots are "JRC 100% / Hansen 0%" sitting on visibly
+intact green forest — regrowth that Hansen's accounting misses.
+
+For an EUDR compliance system this is exactly the kind of thing you must not
+paper over: whether regrowth counts as "forest" at the cutoff is a genuine
+policy question, and it changes the verdict for two out of every five plots
+here. (Disagreement is also roughly flat across the common plot sizes rather
+than concentrated in tiny plots — see the middle panel — so it is not a
+small-plot mixed-pixel effect either.)
 """),
     code("""
 import geopandas as gpd
@@ -304,12 +318,13 @@ plt.show()
 ### What a disagreement actually looks like
 
 Abstract percentages are easy to wave away, so here are concrete cases: plots
-where **JRC says forest and Hansen says not** (or vice versa), each on its own
-Sentinel-2 chip. These are almost always **fragmented forest edges, regrowth,
-or agroforestry mosaics** — genuinely ambiguous land where two reasonable
-mapping methods land on opposite sides of the 30% line. This is the land where
-a compliance verdict is hardest, and where GeoVerdict refuses to hide the
-conflict.
+where the two maps disagree most, each on its own Sentinel-2 chip. Look at what
+they show — almost all are **JRC 100% / Hansen 0% over visibly green forest**.
+That is the regrowth signature from above made visible: land that reads as
+forest today (and to JRC's 2020 classification) but was either cleared or below
+30% canopy in Hansen's year-2000 baseline, so Hansen's loss-accounting never
+counts it back as forest. This is the land where a compliance verdict is
+hardest, and where GeoVerdict refuses to hide the conflict.
 """),
     code("""
 disagreers = gb[gb.maps_disagree].copy()
@@ -331,13 +346,14 @@ plt.show()
     md("""
 ### Why this matters (and what a production system does about it)
 
-**~42% of plots** get a different compliance-relevant baseline depending on
-which official map is consulted. For those plots the verdict is a property of
-the *map choice*, not of the land — and a system that silently picks one map is
-hiding a judgement call inside a lookup. GeoVerdict's response, implemented in
-chapter 05: baseline disagreement is *itself a signal* that caps the verdict at
-**MEDIUM** and states the conflict in the evidence bundle, so a human sees
-exactly which authority said what and why.
+**Nearly 40% of plots** get a different compliance-relevant baseline depending on
+which official map is consulted — and the disagreement is systematic (JRC counts
+post-2000 regrowth as forest, Hansen does not), not random. For those plots the
+verdict is a property of the *map choice*, not of the land — and a system that
+silently picks one map is hiding a judgement call inside a lookup. GeoVerdict's
+response, implemented in chapter 05: baseline disagreement is *itself a signal*
+that caps the verdict at **MEDIUM** and states the conflict in the evidence
+bundle, so a human sees exactly which authority said what and why.
 
 Two honest caveats on the number:
 - Our plots are *randomly placed* over a deforestation frontier; real farm
