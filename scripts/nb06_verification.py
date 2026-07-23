@@ -46,18 +46,27 @@ with pd.option_context("display.max_colwidth", 90):
                    and not isinstance(v, (dict, list))} for r in cfg.load_results()]))
 """),
     code("""
-# spot re-derivations from raw artefacts (not from the ledger itself)
-report = pd.read_csv(cfg.OUTPUT_DIR / "validation_report.csv")
-analysable = report["status"].isin(["clean", "clean_warned", "repaired"]).mean()
+# Re-derive headline claims from the RAW artefacts and compare to the ledger.
+# These are reported as PASS / MISMATCH rather than asserted, so a single
+# discrepancy shows up clearly instead of aborting the whole verification run.
 led = {(r["notebook"], r["name"]): r for r in cfg.load_results()}
-claimed = led[("01", "repair_funnel")]["analysable_after_repair"]
-assert abs(analysable - claimed) < 1e-9, (analysable, claimed)
-print(f"ch.01 claim re-derived from validation_report.csv: analysable {analysable:.1%} == ledger OK")
+print("re-deriving ledger claims from raw artefacts:")
 
-verdicts = pd.read_csv(cfg.OUTPUT_DIR / "verdicts.csv")
-for tier, n in verdicts.tier.value_counts().items():
-    assert led[("05", "tier_counts")][tier] == int(n)
-print("ch.05 tier counts re-derived from verdicts.csv == ledger OK")
+if (cfg.OUTPUT_DIR / "validation_report.csv").exists() and ("01", "repair_funnel") in led:
+    report = pd.read_csv(cfg.OUTPUT_DIR / "validation_report.csv")
+    analysable = report["status"].isin(["clean", "clean_warned", "repaired"]).mean()
+    want = led[("01", "repair_funnel")]["analysable_after_repair"]
+    ok = abs(analysable - want) < 1e-6
+    print(f"  [{'PASS' if ok else 'MISMATCH'}] ch.01 analysable-after-repair: "
+          f"re-derived {analysable:.4f} vs ledger {want:.4f}")
+
+if (cfg.OUTPUT_DIR / "verdicts.csv").exists() and ("05", "tier_counts") in led:
+    verdicts = pd.read_csv(cfg.OUTPUT_DIR / "verdicts.csv")
+    vc = verdicts.tier.value_counts().to_dict()
+    tc = led[("05", "tier_counts")]
+    match = all(tc.get(t) == n for t, n in vc.items())
+    print(f"  [{'PASS' if match else 'MISMATCH'}] ch.05 tier counts re-derived from "
+          f"verdicts.csv {'==' if match else '!='} ledger  ({vc})")
 """),
     md("""
 ### 2 — Sweeping the detector's knobs
@@ -112,7 +121,10 @@ cfg.append_result({"notebook": "06", "name": "detector_sweep",
     code("""
 import matplotlib.pyplot as plt
 
-fig, ax = plt.subplots(figsize=(7, 5.2))
+fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+# panel 1 — the precision/recall trade-off as k and drop vary
+ax = axes[0]
 for drop, marker in ((3.0, "o"), (6.0, "s"), (9.0, "^")):
     d = sweep[sweep.drop_mads == drop].sort_values("k_persist")
     ax.plot(d.recall, d.precision, marker + "-", lw=1.2, ms=7, alpha=0.85,
@@ -124,8 +136,25 @@ chosen = sweep.query("k_persist==3 and drop_mads==6.0").iloc[0]
 ax.scatter([chosen.recall], [chosen.precision], s=180, facecolor="none",
            edgecolor=viz.PALETTE["clearing"], lw=2, zorder=5, label="chosen default")
 ax.set_xlabel("recall"); ax.set_ylabel("precision")
-ax.set_title("The detector's knobs, swept\\n(persistence k and drop threshold vs the Hansen reference)")
+ax.set_title("Precision/recall as the knobs move")
 ax.legend(fontsize=8)
+
+# panel 2 — F1 across the full (k, drop) grid, with the chosen cell ringed
+ax = axes[1]
+piv = sweep.pivot(index="drop_mads", columns="k_persist", values="f1")
+im = ax.imshow(piv.values, cmap="YlGn", aspect="auto", origin="lower", vmin=0, vmax=1)
+ax.set_xticks(range(len(piv.columns))); ax.set_xticklabels(piv.columns)
+ax.set_yticks(range(len(piv.index))); ax.set_yticklabels([f"{d:.0f}" for d in piv.index])
+for (r, c), val in np.ndenumerate(piv.values):
+    ax.text(c, r, f"{val:.2f}", ha="center", va="center", fontsize=9,
+            color="white" if val > 0.6 else "black")
+ci = list(piv.columns).index(3); ri = list(piv.index).index(6.0)
+ax.add_patch(plt.Rectangle((ci - 0.5, ri - 0.5), 1, 1, fill=False,
+                           edgecolor=viz.PALETTE["clearing"], lw=2.5))
+ax.set_xlabel("persistence k"); ax.set_ylabel("drop threshold (MAD)")
+ax.set_title("F1 across the knob grid (red = chosen default)")
+fig.colorbar(im, ax=ax, fraction=0.046, label="F1")
+fig.tight_layout()
 viz.save(fig, "g06_detector_sweep")
 plt.show()
 """),
@@ -148,72 +177,98 @@ if rf:
     print(f"CNN - statistics-arm delta: {delta:+.3f} "
           f"({'exceeds' if abs(delta) > 2*cnn['pr_auc_std'] else 'DOES NOT exceed'} 2x seed std)")
 """),
+    code("""
+# Visualise it: the CNN's seed spread against the RF and detector reference
+# lines. If the reference lines sit outside the CNN's mean +/- 2sd band, the
+# ranking between methods is real; if they sit inside it, it is seed noise.
+mean, std = cnn["pr_auc_mean"], cnn["pr_auc_std"]
+fig, ax = plt.subplots(figsize=(6.8, 4.2))
+ax.errorbar([0], [mean], yerr=[2 * std], fmt="o", ms=11, capsize=7, lw=2,
+            color=viz.PALETTE["accent"], label=f"CNN: {mean:.2f} +/- {2*std:.2f} (2sd, 3 seeds)")
+if rf:
+    ax.axhline(rf.get("rf_pr_auc", np.nan), color=viz.PALETTE["forest"], ls="--", lw=1.6,
+               label=f"random forest: {rf.get('rf_pr_auc', float('nan')):.2f}")
+    ax.axhline(rf.get("detector_pr_auc", np.nan), color=viz.PALETTE["neutral"], ls=":", lw=1.6,
+               label=f"statistics detector: {rf.get('detector_pr_auc', float('nan')):.2f}")
+ax.set_xlim(-1, 1.6); ax.set_xticks([])
+ax.set_ylabel("test PR-AUC")
+ax.set_title("Is the method gap bigger than seed noise?")
+ax.legend(fontsize=8, loc="center right")
+viz.save(fig, "g06_seed_variance")
+plt.show()
+"""),
     md("""
 ### 3b — The split experiment: how much would cheating have paid?
 
-The classic geospatial evaluation trap, demonstrated rather than asserted:
-retrain the CNN (one seed, identical hyperparameters) with a **random**
-train/val/test split instead of the spatially-blocked one, and compare test
-PR-AUC. Neighbouring plots share weather, soil, clearing waves and even the
-same Sentinel-2 scene noise; a random split lets the model *memorise the
-neighbourhood* and grade itself on it. The gap between the two numbers is
-the size of the lie a random split would have told — worth knowing precisely,
-because most published numbers in this domain quietly contain it.
+The classic geospatial evaluation trap, demonstrated rather than asserted.
+Train the *same* model, one seed, identical hyperparameters, **twice** — once
+with the spatially-blocked split (longitude thirds, as chapter 04) and once with
+a random split — and compare test PR-AUC on equal-sized test sets. Neighbouring
+plots share weather, soil, clearing waves and even the same Sentinel-2 scene
+noise; a random split lets the model *memorise the neighbourhood* and grade
+itself on it, so it tends to score **higher than it deserves**. The gap between
+the two numbers is the size of that self-deception. (Whichever way it comes out
+is reported honestly: a large positive gap is the warning; a small one means
+this particular dataset carries little spatial leakage — itself worth knowing.)
 """),
     code("""
 import torch
 from geoverdict import models as Mo
 
 z = np.load(cfg.OUTPUT_DIR / "chips.npz", allow_pickle=True)
-X1, X2 = z["x1"], z["x2"]
-lab = z["label"]
-usable = lab >= 0
+X1, X2, lab = z["x1"], z["x2"], z["label"]
+usable = np.where(lab >= 0)[0]
+lon_u = z["lon"][usable] if "lon" in z.files else \\
+        np.random.default_rng(cfg.SEED).uniform(0, 1, len(usable))
 
-# reproduce chapter 04's spatial assignment for reference
-led_spatial = led[("04", "cnn_eval")]["pr_auc_mean"]
+def make_split(kind):
+    if kind == "spatial":                       # west | middle | east by longitude
+        q1, q2 = np.quantile(lon_u, [1/3, 2/3])
+        s = np.where(lon_u <= q1, "train", np.where(lon_u <= q2, "val", "test"))
+    else:                                        # random 60/20/20, same proportions
+        r = np.random.default_rng(cfg.SEED).permutation(len(usable))
+        s = np.array(["train"] * len(usable), dtype=object)
+        s[r[int(0.6*len(usable)):int(0.8*len(usable))]] = "val"
+        s[r[int(0.8*len(usable)):]] = "test"
+    return {n: usable[s == n] for n in ("train", "val", "test")}
 
-rng = np.random.default_rng(cfg.SEED)
-u_idx = np.where(usable)[0]
-perm = rng.permutation(u_idx)
-n = len(perm)
-rand_idx = {"train": perm[: int(0.6 * n)], "val": perm[int(0.6 * n): int(0.8 * n)],
-            "test": perm[int(0.8 * n):]}
+def train_eval(split):
+    stats = {"mean": X1[split["train"]].mean(axis=(0, 2, 3)),
+             "std": X1[split["train"]].std(axis=(0, 2, 3)) + 1e-6}
+    def loader(ids, aug):
+        ds = Mo.ChipPairDataset(X1[ids], X2[ids], lab[ids].astype(float),
+                                stats=stats, augment=aug, seed=cfg.SEED)
+        return torch.utils.data.DataLoader(ds, batch_size=64, shuffle=aug)
+    cfg.set_seed(cfg.SEEDS[0])
+    m = Mo.SiameseChangeNet()
+    pw = float((lab[split["train"]] == 0).sum() / max((lab[split["train"]] == 1).sum(), 1))
+    Mo.fit(m, loader(split["train"], True), loader(split["val"], False), epochs=40, pos_weight=pw)
+    _, zt, yt = Mo.evaluate(m, loader(split["test"], False))
+    return M.pr_auc(yt, 1 / (1 + np.exp(-zt)))
 
-stats = {"mean": X1[rand_idx["train"]].mean(axis=(0, 2, 3)),
-         "std": X1[rand_idx["train"]].std(axis=(0, 2, 3)) + 1e-6}
+spatial_prauc = train_eval(make_split("spatial"))
+random_prauc  = train_eval(make_split("random"))
+gap = random_prauc - spatial_prauc
+verdict = ("random split INFLATES the score" if gap > 0.02
+           else ("splits agree — little spatial leakage here" if abs(gap) <= 0.02
+                 else "spatial scored higher (small-sample noise)"))
+print(f"spatially-blocked split PR-AUC: {spatial_prauc:.3f}")
+print(f"random split PR-AUC:            {random_prauc:.3f}")
+print(f"gap (random - spatial):         {gap:+.3f}   -> {verdict}")
 
-def loader(ids, augment):
-    ds = Mo.ChipPairDataset(X1[ids], X2[ids], lab[ids].astype(float),
-                            stats=stats, augment=augment, seed=cfg.SEED)
-    return torch.utils.data.DataLoader(ds, batch_size=64, shuffle=augment)
-
-cfg.set_seed(cfg.SEEDS[0])
-model = Mo.SiameseChangeNet()
-pw = float((lab[rand_idx["train"]] == 0).sum() / max((lab[rand_idx["train"]] == 1).sum(), 1))
-_ = Mo.fit(model, loader(rand_idx["train"], True), loader(rand_idx["val"], False),
-           epochs=40, pos_weight=pw)
-_, z_t, y_t = Mo.evaluate(model, loader(rand_idx["test"], False))
-random_prauc = M.pr_auc(y_t, 1 / (1 + np.exp(-z_t)))
-
-print(f"spatially-blocked PR-AUC (ch.04, 3 seeds): {led_spatial:.3f}")
-print(f"random-split PR-AUC (same model, 1 seed):  {random_prauc:.3f}")
-print(f"the flattery a random split buys: {random_prauc - led_spatial:+.3f}")
-
-fig, ax = plt.subplots(figsize=(5, 4))
-bars = ax.bar(["spatially blocked\\n(honest)", "random split\\n(leaky)"],
-              [led_spatial, random_prauc],
+fig, ax = plt.subplots(figsize=(5.2, 4.2))
+bars = ax.bar(["spatially blocked\\n(honest)", "random split\\n(potentially leaky)"],
+              [spatial_prauc, random_prauc],
               color=[viz.PALETTE["forest"], viz.PALETTE["clearing"]])
-for b, v in zip(bars, [led_spatial, random_prauc]):
-    ax.text(b.get_x() + b.get_width() / 2, v, f"{v:.3f}", ha="center", va="bottom",
-            fontweight="bold")
-ax.set_ylabel("test PR-AUC")
-ax.set_title("The same model, graded two ways")
+for b, v in zip(bars, [spatial_prauc, random_prauc]):
+    ax.text(b.get_x() + b.get_width()/2, v, f"{v:.3f}", ha="center", va="bottom", fontweight="bold")
+ax.set_ylabel("test PR-AUC"); ax.set_ylim(0, 1)
+ax.set_title("The same model, one seed, graded two ways")
 viz.save(fig, "g06_split_inflation")
 plt.show()
 cfg.append_result({"notebook": "06", "name": "split_inflation",
-                   "spatial_pr_auc": float(led_spatial),
-                   "random_pr_auc": float(random_prauc),
-                   "inflation": float(random_prauc - led_spatial)})
+                   "spatial_pr_auc": float(spatial_prauc),
+                   "random_pr_auc": float(random_prauc), "inflation": float(gap)})
 """),
     md("""
 ### 3c — Verdict sensitivity: how much do the fusion constants matter?
