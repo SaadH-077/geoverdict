@@ -48,7 +48,7 @@ detector fits; no GPU).
 
 | Data | Source | How it enters the notebook |
 |---|---|---|
-| **Sentinel-2 L2A surface reflectance** (2019–2025) | Copernicus / ESA, hosted on Earth Engine as `COPERNICUS/S2_SR_HARMONIZED` | queried server-side; per plot & scene, the SCL-cloud-masked mean NDVI/NBR returns (cached to `series_raw.parquet`) |
+| **Sentinel-2 L2A surface reflectance** (2019–2025) | Copernicus / ESA, hosted on Earth Engine as `COPERNICUS/S2_SR_HARMONIZED` | composited to a masked monthly median server-side, then reduced per plot; ~84 monthly NDVI/NBR values per plot return (cached to `series_raw.parquet`) |
 | **SCL cloud mask** | part of each Sentinel-2 L2A scene | used inside the same Earth Engine call to drop cloud/shadow pixels |
 | **Hansen post-2020 loss** (reference labels) | Univ. of Maryland, on Earth Engine | the independent referee the detector is scored against |
 | **Plot geometries + baselines** | `outputs/plots_analysis.geojson`, `outputs/baseline.csv` from chapters 01–02 | loaded from Drive |
@@ -113,23 +113,27 @@ print(f"screening subset: {len(sub)} plots "
     md("""
 ### Fetching the series (cached — re-runs are instant)
 
-One server-side pass: for every plot and every Sentinel-2 scene 2019→2025,
-the SCL-masked mean NDVI and NBR over the plot, with the same mask classes as
-the STAC path in chapter 04 (the two access paths share one usability
-definition by construction — `gee.cfg_bad_scl()` imports it from `s2.py`).
-A plot-scene with < 30% valid pixels comes back as *no observation*: a mean
-over a sliver of clear pixels at a cloud edge is noise wearing a number's
-clothing.
+One server-side pass over 2019→2025. Each calendar month is composited to a
+**masked median** on Earth Engine's servers *before* anything is transferred,
+then reduced over each plot — so we pull ~84 monthly values per plot instead of
+thousands of raw scenes. This is deliberate on two counts: it is exactly the
+monthly series the detector consumes, and reducing every raw scene over every
+plot would blow past Earth Engine's 5000-element interactive query limit on a
+multi-tile AOI. The median is also robust to residual cloud the SCL mask
+missed, and the SCL classes are shared with the STAC chip path in chapter 04
+(`gee.cfg_bad_scl()`), so both paths apply one usability definition. A
+plot-month with < 30% valid pixels comes back as *no observation* — a real gap,
+never an invented value.
 """),
     code("""
 cache = cfg.OUTPUT_DIR / "series_raw.parquet"
 if cache.exists():
     raw = pd.read_parquet(cache)
-    print(f"loaded cached series: {len(raw):,} plot-scene observations")
+    print(f"loaded cached series: {len(raw):,} plot-month observations")
 else:
     raw = gee.s2_plot_timeseries(list(sub.geometry), list(sub.plot_id))
     raw.to_parquet(cache)
-    print(f"fetched {len(raw):,} plot-scene observations "
+    print(f"fetched {len(raw):,} plot-month observations "
           f"({raw['ndvi'].notna().mean():.0%} usable)")
 """),
     code("""

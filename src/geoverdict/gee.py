@@ -169,32 +169,38 @@ def s2_plot_timeseries(
     start: str = cfg.BASELINE_START,
     end: str = cfg.MONITOR_END,
     max_scene_cloud: float = 80.0,
-    batch_plots: int = 50,
+    batch_plots: int = 40,
 ) -> pd.DataFrame:
-    """Per plot, per scene: masked-mean NDVI/NBR + valid fraction, server-side.
+    """Per plot, per MONTH: masked-median NDVI/NBR + valid fraction, server-side.
 
     WHY GEE HERE AND STAC IN s2.py — the division of labour, precisely:
-    a six-year NDVI series for 200 plots touches ~400 scene dates. Doing that
-    client-side is ~10^5 windowed HTTP reads (hours on Colab); as a server-
-    side `reduceRegions` mapped over the collection, the pixels never leave
-    Google's racks and only (plot, date, mean) tuples come back — seconds of
-    transfer. Chips for the CNN are the opposite case: we need the actual
-    pixels, few dates, full control over masking — that is the STAC path.
-    Choosing per workload is the design point worth defending in review.
+    a six-year NDVI series for 200 plots touches thousands of scene dates.
+    Doing that client-side is ~10^5 windowed HTTP reads (hours on Colab); the
+    pixels never leave Google's racks and only monthly (plot, month, value)
+    tuples come back. Chips for the CNN are the opposite case — we need the
+    actual pixels, few dates, full control over masking — that is the STAC path.
+
+    WHY MONTHLY COMPOSITES, NOT RAW SCENES. Reducing every raw scene over every
+    plot generates (scenes x plots) results, and over a multi-tile AOI that
+    blows past Earth Engine's 5000-element interactive query limit. So each
+    calendar month is composited to a masked MEDIAN server-side FIRST, then
+    reduced over the plots. This (a) collapses ~1700 scenes to ~84 months, ~20x
+    fewer elements, so the query fits; (b) is exactly the monthly series the
+    detector consumes anyway; and (c) the median is robust to residual cloud the
+    SCL mask missed. A month with no usable scene comes back null — a real gap,
+    not an invented value.
 
     Masking: the SCL band of COPERNICUS/S2_SR_HARMONIZED, same classes as
-    s2.BAD_SCL, so the two access paths apply the SAME usability definition.
-    Scenes are pre-filtered at 80% tile cloud (permissive on purpose — the
-    per-plot mask decides), and a plot-scene with <30% valid pixels returns
-    null rather than a cloud-contaminated mean.
-
-    Batched over plots and years to stay inside getInfo response limits.
+    s2.BAD_SCL, so this path and the STAC chip path apply one usability
+    definition. A plot-month with <30% valid pixels returns null.
     """
     import ee
+    import pandas as pd
 
     bad = list(cfg_bad_scl())
+    month_starts = [str(m.date()) for m in pd.date_range(start, end, freq="MS")]
 
-    def add_indices(img):
+    def prep(img):
         scl = img.select("SCL")
         valid = ee.Image.constant(1)
         for c in bad:
@@ -202,40 +208,50 @@ def s2_plot_timeseries(
         scaled = img.divide(10_000)
         ndvi = scaled.normalizedDifference(["B8", "B4"]).rename("ndvi")
         nbr = scaled.normalizedDifference(["B8", "B12"]).rename("nbr")
-        return (ndvi.addBands(nbr)
-                .updateMask(valid)
-                .addBands(valid.rename("valid"))
-                .copyProperties(img, ["system:time_start", "system:index"]))
+        return ndvi.addBands(nbr).updateMask(valid)  # keep only cloud-free pixels
 
-    years = list(range(int(start[:4]), int(end[:4]) + 1))
+    # a fully-masked 2-band image, used when a month has no scenes at all, so
+    # every monthly image has identical bands and reduceRegions never errors
+    empty = (ee.Image.constant([0, 0]).rename(["ndvi", "nbr"])
+             .updateMask(ee.Image.constant(0)))
+
     rows = []
     for s in range(0, len(geoms), batch_plots):
         fc = _fc_from_geoms(geoms[s:s + batch_plots], ids[s:s + batch_plots])
-        for y in years:
-            y0 = max(f"{y}-01-01", start)
-            y1 = min(f"{y}-12-31", end)
-            coll = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-                    .filterBounds(fc)
-                    .filterDate(y0, y1)
-                    .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", max_scene_cloud))
-                    .map(add_indices))
+        base = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+                .filterBounds(fc)
+                .filterDate(start, end)
+                .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", max_scene_cloud)))
 
-            def per_image(img):
-                date = ee.Date(img.get("system:time_start")).format("YYYY-MM-dd")
-                return img.reduceRegions(collection=fc, reducer=ee.Reducer.mean(), scale=10) \
-                          .map(lambda f: f.set("date", date))
+        def monthly_image(ms):
+            m0 = ee.Date(ms)
+            subc = base.filterDate(m0, m0.advance(1, "month")).map(prep)
+            med = ee.Image(ee.Algorithms.If(subc.size().gt(0),
+                                            subc.select(["ndvi", "nbr"]).median(),
+                                            empty))
+            # valid_frac = fraction of plot pixels that had >=1 cloud-free scene
+            valid_frac = med.select("ndvi").mask().rename("valid_frac")
+            return med.addBands(valid_frac).set("date", ms)
 
-            feats = coll.map(per_image).flatten().getInfo()["features"]
-            for f in feats:
-                p = f["properties"]
-                rows.append({
-                    "plot_id": p["plot_id"], "date": p.get("date"),
-                    "ndvi": p.get("ndvi"), "nbr": p.get("nbr"),
-                    "valid_frac": p.get("valid"),
-                })
+        monthly = ee.ImageCollection([monthly_image(ms) for ms in month_starts])
+
+        def per_image(img):
+            date = img.get("date")
+            return (img.reduceRegions(collection=fc, reducer=ee.Reducer.mean(), scale=10)
+                    .map(lambda f: f.set("date", date)))
+
+        feats = monthly.map(per_image).flatten().getInfo()["features"]
+        for f in feats:
+            p = f["properties"]
+            rows.append({
+                "plot_id": p["plot_id"], "date": p.get("date"),
+                "ndvi": p.get("ndvi"), "nbr": p.get("nbr"),
+                "valid_frac": p.get("valid_frac"),
+            })
+
     df = pd.DataFrame(rows)
     if len(df):
-        # A plot-scene where <30% of pixels were usable is not an observation.
+        # A plot-month where <30% of pixels were usable is not an observation.
         df.loc[df["valid_frac"].fillna(0) < 0.30, ["ndvi", "nbr"]] = None
     df.attrs["assets"] = {"s2": "COPERNICUS/S2_SR_HARMONIZED"}
     return df
